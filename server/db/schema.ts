@@ -14,10 +14,21 @@ const DATA   = process.env.NODE_ENV === 'production' ? '/tmp' : path.resolve(pro
 const DB_FILE = path.join(DATA, 'rapha.db');
 
 if (!fs.existsSync(DATA)) {
+  console.log('[DB] Criando diretório:', DATA);
   fs.mkdirSync(DATA, { recursive: true });
 }
 
-export const db = new Database(DB_FILE);
+console.log('[DB] Tentando abrir banco em:', DB_FILE);
+let db;
+try {
+  db = new Database(DB_FILE, { verbose: console.log });
+  console.log('[DB] Banco aberto com sucesso!');
+} catch (err) {
+  console.error('[DB] Erro crítico ao abrir banco:', err);
+  throw err;
+}
+
+export { db };
 
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
