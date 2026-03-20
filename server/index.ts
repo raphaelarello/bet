@@ -163,6 +163,11 @@ async function startServer() {
     });
   }
 
+  // Health check endpoint para o Render
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
   process.on('SIGTERM', async () => {
     await engine.shutdown().catch(() => undefined);
     process.exit(0);
