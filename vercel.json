@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "buildCommand": "pnpm build",
+  "outputDirectory": "dist/public",
+  "rewrites": [
+    {
+      "source": "/((?!api|_next|favicon|assets|__manus__).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
