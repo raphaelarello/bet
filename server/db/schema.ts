@@ -23,7 +23,7 @@ if (isProd && process.env.DATABASE_URL) {
   sqliteDb = new Database(path.join(DATA, 'rapha.db'));
 }
 
-export const db = {
+const dbObj = {
   prepare: (sql: string) => {
     if (isPg) {
       const pgSql = sql
@@ -64,6 +64,8 @@ export const db = {
   }
 };
 
+export const db = dbObj;
+
 export async function initDb() {
   const schema = `
     CREATE TABLE IF NOT EXISTS users (
@@ -92,4 +94,4 @@ export async function initDb() {
   }
 }
 
-export default db;
+export default dbObj;
