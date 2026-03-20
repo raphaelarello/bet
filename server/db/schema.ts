@@ -71,7 +71,6 @@ const db = {
 };
 
 export { db };
-export default db;
 
 export async function initDb() {
   const schema = `
@@ -100,3 +99,5 @@ export async function initDb() {
       VALUES ('admin@raphaguru.com', 'Administrador', ?, 'admin', 1, 1)`).run(hash);
   }
 }
+
+export default db;
