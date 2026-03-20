@@ -32,7 +32,7 @@ if (isProd && process.env.DATABASE_URL) {
   sqliteDb.pragma('foreign_keys = ON');
 }
 
-export const db = {
+const dbObj = {
   prepare: (sql: string) => {
     if (isPg) {
       const pgSql = sql
@@ -72,6 +72,9 @@ export const db = {
     return sqliteDb.exec(sql);
   }
 };
+
+export const db = dbObj;
+export default dbObj;
 
 export async function initDb() {
   const schema = `
