@@ -11,20 +11,26 @@ let isPg = false;
 let pool: any;
 let sqliteDb: any;
 
-if (isProd && process.env.DATABASE_URL) {
-  isPg = true;
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
-  });
-} else {
-  const DATA = path.resolve(process.cwd(), 'data');
-  if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
-  sqliteDb = new Database(path.join(DATA, 'rapha.db'));
+try {
+  if (isProd && process.env.DATABASE_URL) {
+    isPg = true;
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false }
+    });
+    console.log('[DB] Usando PostgreSQL');
+  } else {
+    const DATA = path.resolve(process.cwd(), 'data');
+    if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
+    sqliteDb = new Database(path.join(DATA, 'rapha.db'));
+    console.log('[DB] Usando SQLite');
+  }
+} catch (err) {
+  console.error('[DB] Erro ao inicializar conexão:', err);
 }
 
 // Objeto db definido globalmente para evitar undefined
-const db = {
+export const db = {
   prepare: (sql: string) => {
     if (isPg) {
       const pgSql = sql
@@ -49,6 +55,7 @@ const db = {
         }
       };
     }
+    if (!sqliteDb) throw new Error('SQLite não inicializado');
     const stmt = sqliteDb.prepare(sql);
     return {
       get: async (...args: any[]) => stmt.get(...args),
@@ -66,11 +73,10 @@ const db = {
         .replace(/REAL/g, 'DECIMAL');
       return await pool.query(pgSql);
     }
+    if (!sqliteDb) throw new Error('SQLite não inicializado');
     return sqliteDb.exec(sql);
   }
 };
-
-export { db };
 
 export async function initDb() {
   const schema = `
@@ -101,4 +107,4 @@ export async function initDb() {
 }
 
 export default db;
-// v132
+// v133

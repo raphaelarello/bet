@@ -4,11 +4,18 @@
 
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { db } from '../db/schema.js';
+import * as schema from '../db/schema.js';
 import { signToken, requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 const SALT = 12;
+
+// Garante que o db não seja undefined
+const db = schema.db || (schema as any).default;
+
+if (!db) {
+  console.error('[AUTH] Erro crítico: Objeto db não encontrado no schema');
+}
 
 // ── Registro ──────────────────────────────────────────────────
 router.post('/register', async (req, res) => {
@@ -53,7 +60,7 @@ router.post('/register', async (req, res) => {
     res.status(201).json({ token: signToken(user), user });
   } catch (err) {
     console.error('[auth/register]', err);
-    res.status(500).json({ error: 'Erro interno' });
+    res.status(500).json({ error: 'Erro interno', _dev: String(err) });
   }
 });
 
@@ -63,6 +70,8 @@ router.post('/login', async (req, res) => {
     const { email, password } = req.body as { email?: string; password?: string };
     if (!email || !password)
       return res.status(400).json({ error: 'Email e senha obrigatórios' });
+
+    if (!db) throw new Error('Banco de dados não disponível');
 
     const user = await db.prepare(`SELECT * FROM users WHERE email = ?`).get(email.toLowerCase()) as {
       id: number; email: string; name: string; password_hash: string;
@@ -167,3 +176,4 @@ router.post('/change-password', requireAuth, async (req, res) => {
 });
 
 export default router;
+// v133
