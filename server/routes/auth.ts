@@ -10,7 +10,7 @@
 
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { db } from '../db/schema.js';
+import db from '../db/schema.js';
 import { signToken, requireAuth } from '../middleware/auth.js';
 
 const router = Router();
