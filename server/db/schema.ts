@@ -23,7 +23,8 @@ if (isProd && process.env.DATABASE_URL) {
   sqliteDb = new Database(path.join(DATA, 'rapha.db'));
 }
 
-const db = {
+// Objeto db com métodos que delegam para o driver correto
+export const db = {
   prepare: (sql: string) => {
     if (isPg) {
       const pgSql = sql
@@ -48,7 +49,14 @@ const db = {
         }
       };
     }
-    return sqliteDb.prepare(sql);
+    // No SQLite, o prepare é síncrono, mas vamos retornar um objeto com métodos assíncronos
+    // para manter a compatibilidade de interface se necessário, ou apenas retornar o stmt
+    const stmt = sqliteDb.prepare(sql);
+    return {
+      get: async (...args: any[]) => stmt.get(...args),
+      all: async (...args: any[]) => stmt.all(...args),
+      run: async (...args: any[]) => stmt.run(...args)
+    };
   },
   exec: async (sql: string) => {
     if (isPg) {
@@ -63,8 +71,6 @@ const db = {
     return sqliteDb.exec(sql);
   }
 };
-
-export { db };
 
 export async function initDb() {
   const schema = `
@@ -81,7 +87,7 @@ export async function initDb() {
     );
   `;
   if (isPg) await db.exec(schema);
-  else db.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
+  else await db.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
 
   const hash = bcrypt.hashSync('superadmin', 10);
   if (isPg) {
@@ -89,7 +95,7 @@ export async function initDb() {
       VALUES ('admin@raphaguru.com', 'Administrador', $1, 'admin', 1, 1)
       ON CONFLICT (email) DO UPDATE SET password_hash = $1`).run(hash);
   } else {
-    db.prepare(`INSERT OR REPLACE INTO users (email, name, password_hash, role, is_active, email_verified) 
+    await db.prepare(`INSERT OR REPLACE INTO users (email, name, password_hash, role, is_active, email_verified) 
       VALUES ('admin@raphaguru.com', 'Administrador', ?, 'admin', 1, 1)`).run(hash);
   }
 }
