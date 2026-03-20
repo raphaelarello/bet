@@ -10,7 +10,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dir  = path.dirname(fileURLToPath(import.meta.url));
-const DATA   = process.env.NODE_ENV === 'production' ? '/app/data' : path.resolve(process.cwd(), 'data');
+const DATA   = process.env.NODE_ENV === 'production' ? '/tmp' : path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA, 'rapha.db');
 
 if (!fs.existsSync(DATA)) {
