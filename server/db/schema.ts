@@ -154,8 +154,5 @@ async function initDb() {
   console.log('[DB] ✓ admin@raphaguru.com | senha: superadmin');
 }
 
-if (isPg) initDb().catch(console.error);
-else initDb();
-
-export { db };
+export { db, initDb };
 export default db;

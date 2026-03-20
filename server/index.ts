@@ -88,10 +88,11 @@ async function startServer() {
 
   // Banco e módulo SaaS
   try {
-    await import('./db/schema.js');
+    const { initDb } = await import('./db/schema.js');
+    await initDb();
     console.log('[Servidor] Banco SaaS pronto');
   } catch (err) {
-    console.warn('[Servidor] Banco SaaS indisponível:', err);
+    console.error('[Servidor] Erro crítico ao inicializar banco:', err);
   }
 
   try {
