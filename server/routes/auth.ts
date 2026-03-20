@@ -4,22 +4,18 @@
 
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import * as schema from '../db/schema.js';
 import { signToken, requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 const SALT = 12;
 
-// Garante que o db não seja undefined
-const db = schema.db || (schema as any).default || (global as any)._db_instance;
-
-if (!db) {
-  console.error('[AUTH] Erro crítico: Objeto db não encontrado no schema ou global');
-}
+// Brute force: usa o global diretamente
+const getDb = () => (global as any).db || (global as any)._db_instance;
 
 // ── Registro ──────────────────────────────────────────────────
 router.post('/register', async (req, res) => {
   try {
+    const db = getDb();
     const { email, name, password, phone } = req.body as {
       email?: string; name?: string; password?: string; phone?: string;
     };
@@ -67,11 +63,12 @@ router.post('/register', async (req, res) => {
 // ── Login ─────────────────────────────────────────────────────
 router.post('/login', async (req, res) => {
   try {
+    const db = getDb();
     const { email, password } = req.body as { email?: string; password?: string };
     if (!email || !password)
       return res.status(400).json({ error: 'Email e senha obrigatórios' });
 
-    if (!db) throw new Error('Banco de dados não disponível');
+    if (!db) throw new Error('Banco de dados não disponível no global');
 
     const user = await db.prepare(`SELECT * FROM users WHERE email = ?`).get(email.toLowerCase()) as {
       id: number; email: string; name: string; password_hash: string;
@@ -109,12 +106,14 @@ router.post('/login', async (req, res) => {
 
 // ── Logout ────────────────────────────────────────────────────
 router.post('/logout', requireAuth, async (req, res) => {
+  const db = getDb();
   await db.prepare(`DELETE FROM sessions WHERE jti = ?`).run(req.user!.jti);
   res.json({ ok: true });
 });
 
 // ── /me ───────────────────────────────────────────────────────
 router.get('/me', requireAuth, async (req, res) => {
+  const db = getDb();
   const user = await db.prepare(`
     SELECT u.id, u.email, u.name, u.role, u.avatar_url, u.phone,
            u.email_verified, u.login_count, u.last_login_at, u.created_at
@@ -146,6 +145,7 @@ router.get('/me', requireAuth, async (req, res) => {
 
 // ── Atualiza perfil ───────────────────────────────────────────
 router.patch('/profile', requireAuth, async (req, res) => {
+  const db = getDb();
   const { name, phone, avatar_url } = req.body as { name?: string; phone?: string; avatar_url?: string };
   await db.prepare(`
     UPDATE users SET
@@ -160,6 +160,7 @@ router.patch('/profile', requireAuth, async (req, res) => {
 
 // ── Troca senha ───────────────────────────────────────────────
 router.post('/change-password', requireAuth, async (req, res) => {
+  const db = getDb();
   const { current, novo } = req.body as { current?: string; novo?: string };
   if (!current || !novo) return res.status(400).json({ error: 'Campos obrigatórios' });
   if (novo.length < 8) return res.status(400).json({ error: 'Mínimo 8 caracteres' });
@@ -176,4 +177,4 @@ router.post('/change-password', requireAuth, async (req, res) => {
 });
 
 export default router;
-// v135
+// v136
