@@ -170,7 +170,8 @@ async function startServer() {
       status: 'ok', 
       timestamp: new Date().toISOString(),
       env: process.env.NODE_ENV,
-      db: process.env.DATABASE_URL ? 'postgres-configured' : 'sqlite-fallback'
+      db: process.env.DATABASE_URL ? 'postgres-configured' : 'sqlite-fallback',
+      globalKeys: Object.keys(global).filter(k => k.includes('db') || k.includes('init'))
     });
   });
 
