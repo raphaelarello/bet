@@ -99,8 +99,12 @@ router.post('/login', async (req, res) => {
       } : null,
     });
   } catch (err) {
-    console.error('[auth/login]', err);
-    res.status(500).json({ error: 'Erro interno' });
+    console.error('[auth/login] ERRO COMPLETO:', JSON.stringify(err, null, 2));
+    if (err instanceof Error) {
+      console.error('[auth/login] Mensagem:', err.message);
+      console.error('[auth/login] Stack:', err.stack);
+    }
+    res.status(500).json({ error: 'Erro interno', _dev: String(err) });
   }
 });
 
