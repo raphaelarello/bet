@@ -1,7 +1,3 @@
-/**
- * Rapha Guru — Banco de Dados Híbrido (SQLite/PostgreSQL)
- */
-
 import Database from 'better-sqlite3';
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
@@ -16,23 +12,18 @@ let pool: any;
 let sqliteDb: any;
 
 if (isProd && process.env.DATABASE_URL) {
-  console.log('[DB] Usando PostgreSQL (Produção)');
   isPg = true;
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
   });
 } else {
-  console.log('[DB] Usando SQLite (Desenvolvimento)');
   const DATA = path.resolve(process.cwd(), 'data');
   if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
-  const DB_FILE = path.join(DATA, 'rapha.db');
-  sqliteDb = new Database(DB_FILE);
-  sqliteDb.pragma('journal_mode = WAL');
-  sqliteDb.pragma('foreign_keys = ON');
+  sqliteDb = new Database(path.join(DATA, 'rapha.db'));
 }
 
-const dbObj = {
+export const db = {
   prepare: (sql: string) => {
     if (isPg) {
       const pgSql = sql
@@ -73,8 +64,6 @@ const dbObj = {
   }
 };
 
-export const db = dbObj;
-
 export async function initDb() {
   const schema = `
     CREATE TABLE IF NOT EXISTS users (
@@ -89,12 +78,8 @@ export async function initDb() {
       updated_at    INTEGER NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
     );
   `;
-
-  if (isPg) {
-    await db.exec(schema);
-  } else {
-    db.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
-  }
+  if (isPg) await db.exec(schema);
+  else db.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
 
   const hash = bcrypt.hashSync('superadmin', 10);
   if (isPg) {
@@ -105,7 +90,6 @@ export async function initDb() {
     db.prepare(`INSERT OR REPLACE INTO users (email, name, password_hash, role, is_active, email_verified) 
       VALUES ('admin@raphaguru.com', 'Administrador', ?, 'admin', 1, 1)`).run(hash);
   }
-  console.log('[DB] ✓ admin@raphaguru.com | senha: superadmin');
 }
 
 export default db;
