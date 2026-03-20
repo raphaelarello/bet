@@ -1,12 +1,12 @@
 {
   "name": "football-tips-pro",
-  "version": "1.0.141",
+  "version": "1.0.142",
   "type": "module",
   "license": "MIT",
   "scripts": {
     "dev": "vite --host",
-    "build": "vite build",
-    "start": "NODE_ENV=production npx tsx server/index.ts",
+    "build": "tsc",
+    "start": "NODE_ENV=production node dist/server/index.js",
     "preview": "vite preview --host",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
