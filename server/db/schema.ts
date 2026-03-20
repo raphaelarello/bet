@@ -1,6 +1,5 @@
 /**
  * Rapha Guru — Banco de Dados Híbrido (SQLite/PostgreSQL)
- * Usa SQLite localmente e PostgreSQL (Supabase) em produção no Railway
  */
 
 import Database from 'better-sqlite3';
@@ -8,31 +7,35 @@ import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 
 const { Pool } = pg;
 const isProd = process.env.NODE_ENV === 'production';
 
-// ── Configuração do Banco ─────────────────────────────────────
-let db: any = {
-  prepare: () => ({ get: async () => null, all: async () => [], run: async () => ({}) }),
-  exec: async () => {}
-};
 let isPg = false;
+let pool: any;
+let sqliteDb: any;
 
 if (isProd && process.env.DATABASE_URL) {
   console.log('[DB] Usando PostgreSQL (Produção)');
   isPg = true;
-  const pool = new Pool({
+  pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
   });
-  
-  // Wrapper para manter compatibilidade com better-sqlite3
-  const pgDb = {
-    prepare: (sql: string) => {
-      // Converte sintaxe SQLite para PostgreSQL básica
-      let pgSql = sql
+} else {
+  console.log('[DB] Usando SQLite (Desenvolvimento)');
+  const DATA = path.resolve(process.cwd(), 'data');
+  if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
+  const DB_FILE = path.join(DATA, 'rapha.db');
+  sqliteDb = new Database(DB_FILE);
+  sqliteDb.pragma('journal_mode = WAL');
+  sqliteDb.pragma('foreign_keys = ON');
+}
+
+export const db = {
+  prepare: (sql: string) => {
+    if (isPg) {
+      const pgSql = sql
         .replace(/\?/g, (_, i, full) => `$${full.slice(0, i).split('?').length}`)
         .replace(/unixepoch\(\)/g, 'EXTRACT(EPOCH FROM NOW())::INTEGER')
         .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/g, 'SERIAL PRIMARY KEY')
@@ -53,8 +56,11 @@ if (isProd && process.env.DATABASE_URL) {
           return { lastInsertRowid: res.rows[0]?.id || 0, changes: res.rowCount };
         }
       };
-    },
-    exec: async (sql: string) => {
+    }
+    return sqliteDb.prepare(sql);
+  },
+  exec: async (sql: string) => {
+    if (isPg) {
       const pgSql = sql
         .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/g, 'SERIAL PRIMARY KEY')
         .replace(/COLLATE NOCASE/g, '')
@@ -63,24 +69,11 @@ if (isProd && process.env.DATABASE_URL) {
         .replace(/REAL/g, 'DECIMAL');
       return await pool.query(pgSql);
     }
-  };
-  db.prepare = pgDb.prepare;
-  db.exec = pgDb.exec;
-} else {
-  console.log('[DB] Usando SQLite (Desenvolvimento)');
-  const __dir = path.dirname(fileURLToPath(import.meta.url));
-  const DATA = path.resolve(process.cwd(), 'data');
-  const DB_FILE = path.join(DATA, 'rapha.db');
+    return sqliteDb.exec(sql);
+  }
+};
 
-  if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
-  const sqliteDb = new Database(DB_FILE);
-  sqliteDb.pragma('journal_mode = WAL');
-  sqliteDb.pragma('foreign_keys = ON');
-  db = sqliteDb;
-}
-
-// ── Inicialização do Schema ───────────────────────────────────
-async function initDb() {
+export async function initDb() {
   const schema = `
     CREATE TABLE IF NOT EXISTS users (
       id            SERIAL PRIMARY KEY,
@@ -88,66 +81,19 @@ async function initDb() {
       name          TEXT    NOT NULL,
       password_hash TEXT    NOT NULL,
       role          TEXT    NOT NULL DEFAULT 'free',
-      avatar_url    TEXT,
-      phone         TEXT,
-      cpf           TEXT,
       is_active     INTEGER NOT NULL DEFAULT 1,
       email_verified INTEGER NOT NULL DEFAULT 0,
-      verify_token  TEXT,
-      reset_token   TEXT,
-      reset_expires INTEGER,
-      last_login_at INTEGER,
-      login_count   INTEGER NOT NULL DEFAULT 0,
       created_at    INTEGER NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER),
       updated_at    INTEGER NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
-    );
-
-    CREATE TABLE IF NOT EXISTS plans (
-      id            SERIAL PRIMARY KEY,
-      slug          TEXT NOT NULL UNIQUE,
-      name          TEXT NOT NULL,
-      description   TEXT,
-      price_monthly DECIMAL NOT NULL DEFAULT 0,
-      price_annual  DECIMAL,
-      features      TEXT NOT NULL DEFAULT '[]',
-      limits        TEXT NOT NULL DEFAULT '{}',
-      badge_color   TEXT DEFAULT '#3b82f6',
-      is_active     INTEGER NOT NULL DEFAULT 1,
-      sort_order    INTEGER NOT NULL DEFAULT 0,
-      created_at    INTEGER NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
-    );
-
-    CREATE TABLE IF NOT EXISTS subscriptions (
-      id                  SERIAL PRIMARY KEY,
-      user_id             INTEGER NOT NULL,
-      plan_slug           TEXT    NOT NULL,
-      status              TEXT    NOT NULL DEFAULT 'pending',
-      billing_cycle       TEXT    NOT NULL DEFAULT 'monthly',
-      amount_brl          DECIMAL NOT NULL DEFAULT 0,
-      payment_method      TEXT,
-      gateway             TEXT    DEFAULT 'pagarme',
-      gateway_sub_id      TEXT,
-      gateway_customer_id TEXT,
-      period_start        INTEGER,
-      period_end          INTEGER,
-      cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
-      cancelled_at        INTEGER,
-      cancel_reason       TEXT,
-      next_billing_at     INTEGER,
-      trial_ends_at       INTEGER,
-      created_at          INTEGER NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER),
-      updated_at          INTEGER NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
     );
   `;
 
   if (isPg) {
     await db.exec(schema);
   } else {
-    // SQLite usa sintaxe original
     db.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
   }
 
-  // Seed Admin
   const hash = bcrypt.hashSync('superadmin', 10);
   if (isPg) {
     await db.prepare(`INSERT INTO users (email, name, password_hash, role, is_active, email_verified) 
@@ -160,5 +106,4 @@ async function initDb() {
   console.log('[DB] ✓ admin@raphaguru.com | senha: superadmin');
 }
 
-export { db, initDb };
 export default db;
