@@ -74,7 +74,6 @@ const dbObj = {
 };
 
 export const db = dbObj;
-export default dbObj;
 
 export async function initDb() {
   const schema = `
