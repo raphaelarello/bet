@@ -155,4 +155,3 @@ async function initDb() {
 }
 
 export { db, initDb };
-export default db;
