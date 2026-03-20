@@ -166,7 +166,12 @@ async function startServer() {
 
   // Health check endpoint para o Render
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      env: process.env.NODE_ENV,
+      db: process.env.DATABASE_URL ? 'postgres-configured' : 'sqlite-fallback'
+    });
   });
 
   process.on('SIGTERM', async () => {
