@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite --host",
-    "build": "vite build && esbuild server/index.ts --platform=node --bundle --format=esm --outdir=dist --external:better-sqlite3 --external:pg --external:bcryptjs --external:jsonwebtoken --external:express --external:cors --external:helmet --external:express-rate-limit",
+    "build": "vite build && esbuild server/index.ts server/db/schema.ts server/routes/auth.ts server/routes/payments.ts server/routes/admin.ts --platform=node --bundle --format=esm --outdir=dist --external:better-sqlite3 --external:pg --external:bcryptjs --external:jsonwebtoken --external:express --external:cors --external:helmet --external:express-rate-limit",
     "start": "NODE_ENV=production node dist/index.js",
     "preview": "vite preview --host",
     "check": "tsc --noEmit",
