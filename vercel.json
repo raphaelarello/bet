@@ -2,15 +2,10 @@
   "version": 2,
   "buildCommand": "pnpm build",
   "outputDirectory": "dist/public",
-  "functions": {
-    "api/**": {
-      "runtime": "nodejs20.x"
-    }
-  },
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/dist/index.js?path=/api/$1"
+      "destination": "/api/index.js"
     },
     {
       "source": "/((?!api|_next|favicon|assets|__manus__).*)",
