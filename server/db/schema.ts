@@ -23,7 +23,7 @@ if (isProd && process.env.DATABASE_URL) {
   sqliteDb = new Database(path.join(DATA, 'rapha.db'));
 }
 
-const dbObj = {
+const db = {
   prepare: (sql: string) => {
     if (isPg) {
       const pgSql = sql
@@ -64,7 +64,7 @@ const dbObj = {
   }
 };
 
-export const db = dbObj;
+export { db };
 
 export async function initDb() {
   const schema = `
@@ -94,4 +94,4 @@ export async function initDb() {
   }
 }
 
-export default dbObj;
+export default db;
