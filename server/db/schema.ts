@@ -14,7 +14,10 @@ const { Pool } = pg;
 const isProd = process.env.NODE_ENV === 'production';
 
 // ── Configuração do Banco ─────────────────────────────────────
-let db: any;
+let db: any = {
+  prepare: () => ({ get: async () => null, all: async () => [], run: async () => ({}) }),
+  exec: async () => {}
+};
 let isPg = false;
 
 if (isProd && process.env.DATABASE_URL) {
@@ -26,7 +29,7 @@ if (isProd && process.env.DATABASE_URL) {
   });
   
   // Wrapper para manter compatibilidade com better-sqlite3
-  db = {
+  const pgDb = {
     prepare: (sql: string) => {
       // Converte sintaxe SQLite para PostgreSQL básica
       let pgSql = sql
@@ -61,6 +64,8 @@ if (isProd && process.env.DATABASE_URL) {
       return await pool.query(pgSql);
     }
   };
+  db.prepare = pgDb.prepare;
+  db.exec = pgDb.exec;
 } else {
   console.log('[DB] Usando SQLite (Desenvolvimento)');
   const __dir = path.dirname(fileURLToPath(import.meta.url));
@@ -68,9 +73,10 @@ if (isProd && process.env.DATABASE_URL) {
   const DB_FILE = path.join(DATA, 'rapha.db');
 
   if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
-  db = new Database(DB_FILE);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const sqliteDb = new Database(DB_FILE);
+  sqliteDb.pragma('journal_mode = WAL');
+  sqliteDb.pragma('foreign_keys = ON');
+  db = sqliteDb;
 }
 
 // ── Inicialização do Schema ───────────────────────────────────
