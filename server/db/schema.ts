@@ -24,7 +24,7 @@ if (isProd && process.env.DATABASE_URL) {
 }
 
 // Objeto db definido globalmente para evitar undefined
-const dbInstance = {
+const db = {
   prepare: (sql: string) => {
     if (isPg) {
       const pgSql = sql
@@ -70,7 +70,7 @@ const dbInstance = {
   }
 };
 
-export const db = dbInstance;
+export { db };
 
 export async function initDb() {
   const schema = `
@@ -86,18 +86,18 @@ export async function initDb() {
       updated_at    INTEGER NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
     );
   `;
-  if (isPg) await dbInstance.exec(schema);
-  else await dbInstance.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
+  if (isPg) await db.exec(schema);
+  else await db.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
 
   const hash = bcrypt.hashSync('superadmin', 10);
   if (isPg) {
-    await dbInstance.prepare(`INSERT INTO users (email, name, password_hash, role, is_active, email_verified) 
+    await db.prepare(`INSERT INTO users (email, name, password_hash, role, is_active, email_verified) 
       VALUES ('admin@raphaguru.com', 'Administrador', $1, 'admin', 1, 1)
       ON CONFLICT (email) DO UPDATE SET password_hash = $1`).run(hash);
   } else {
-    await dbInstance.prepare(`INSERT OR REPLACE INTO users (email, name, password_hash, role, is_active, email_verified) 
+    await db.prepare(`INSERT OR REPLACE INTO users (email, name, password_hash, role, is_active, email_verified) 
       VALUES ('admin@raphaguru.com', 'Administrador', ?, 'admin', 1, 1)`).run(hash);
   }
 }
 
-export default dbInstance;
+export default db;
