@@ -11,7 +11,7 @@ const router = Router();
 const SALT = 12;
 
 // Garante que o db não seja undefined
-const db = schema.db || (schema as any).default || (global as any).db;
+const db = schema.db || (schema as any).default || (global as any)._db_instance;
 
 if (!db) {
   console.error('[AUTH] Erro crítico: Objeto db não encontrado no schema ou global');
@@ -176,4 +176,4 @@ router.post('/change-password', requireAuth, async (req, res) => {
 });
 
 export default router;
-// v134
+// v135

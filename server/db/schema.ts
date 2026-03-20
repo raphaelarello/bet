@@ -7,8 +7,9 @@ import fs from 'fs';
 const { Pool } = pg;
 const isProd = process.env.NODE_ENV === 'production';
 
-// Inicialização única do banco
-if (!(global as any)._db_init) {
+function getDbInstance() {
+  if ((global as any)._db_instance) return (global as any)._db_instance;
+
   let isPg = false;
   let pool: any;
   let sqliteDb: any;
@@ -20,18 +21,16 @@ if (!(global as any)._db_init) {
         connectionString: process.env.DATABASE_URL,
         ssl: { rejectUnauthorized: false }
       });
-      console.log('[DB] Global: Usando PostgreSQL');
     } else {
       const DATA = path.resolve(process.cwd(), 'data');
       if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
       sqliteDb = new Database(path.join(DATA, 'rapha.db'));
-      console.log('[DB] Global: Usando SQLite');
     }
   } catch (err) {
-    console.error('[DB] Erro na inicialização global:', err);
+    console.error('[DB] Erro:', err);
   }
 
-  (global as any).db = {
+  const instance = {
     prepare: (sql: string) => {
       if (isPg) {
         const pgSql = sql
@@ -56,7 +55,6 @@ if (!(global as any)._db_init) {
           }
         };
       }
-      if (!sqliteDb) throw new Error('SQLite não inicializado');
       const stmt = sqliteDb.prepare(sql);
       return {
         get: async (...args: any[]) => stmt.get(...args),
@@ -74,18 +72,19 @@ if (!(global as any)._db_init) {
           .replace(/REAL/g, 'DECIMAL');
         return await pool.query(pgSql);
       }
-      if (!sqliteDb) throw new Error('SQLite não inicializado');
       return sqliteDb.exec(sql);
-    }
+    },
+    isPg
   };
-  (global as any)._db_init = true;
-  (global as any)._is_pg = isPg;
+
+  (global as any)._db_instance = instance;
+  return instance;
 }
 
-export const db = (global as any).db;
+export const db = getDbInstance();
 
 export async function initDb() {
-  const isPg = (global as any)._is_pg;
+  const d = getDbInstance();
   const schema = `
     CREATE TABLE IF NOT EXISTS users (
       id            SERIAL PRIMARY KEY,
@@ -99,19 +98,19 @@ export async function initDb() {
       updated_at    INTEGER NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
     );
   `;
-  if (isPg) await db.exec(schema);
-  else await db.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
+  if (d.isPg) await d.exec(schema);
+  else await d.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
 
   const hash = bcrypt.hashSync('superadmin', 10);
-  if (isPg) {
-    await db.prepare(`INSERT INTO users (email, name, password_hash, role, is_active, email_verified) 
+  if (d.isPg) {
+    await d.prepare(`INSERT INTO users (email, name, password_hash, role, is_active, email_verified) 
       VALUES ('admin@raphaguru.com', 'Administrador', $1, 'admin', 1, 1)
       ON CONFLICT (email) DO UPDATE SET password_hash = $1`).run(hash);
   } else {
-    await db.prepare(`INSERT OR REPLACE INTO users (email, name, password_hash, role, is_active, email_verified) 
+    await d.prepare(`INSERT OR REPLACE INTO users (email, name, password_hash, role, is_active, email_verified) 
       VALUES ('admin@raphaguru.com', 'Administrador', ?, 'admin', 1, 1)`).run(hash);
   }
 }
 
 export default db;
-// v134
+// v135
