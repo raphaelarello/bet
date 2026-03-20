@@ -23,8 +23,8 @@ if (isProd && process.env.DATABASE_URL) {
   sqliteDb = new Database(path.join(DATA, 'rapha.db'));
 }
 
-// Objeto db com métodos que delegam para o driver correto
-export const db = {
+// Objeto db definido globalmente para evitar undefined
+const dbInstance = {
   prepare: (sql: string) => {
     if (isPg) {
       const pgSql = sql
@@ -49,8 +49,6 @@ export const db = {
         }
       };
     }
-    // No SQLite, o prepare é síncrono, mas vamos retornar um objeto com métodos assíncronos
-    // para manter a compatibilidade de interface se necessário, ou apenas retornar o stmt
     const stmt = sqliteDb.prepare(sql);
     return {
       get: async (...args: any[]) => stmt.get(...args),
@@ -72,6 +70,8 @@ export const db = {
   }
 };
 
+export const db = dbInstance;
+
 export async function initDb() {
   const schema = `
     CREATE TABLE IF NOT EXISTS users (
@@ -86,18 +86,18 @@ export async function initDb() {
       updated_at    INTEGER NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
     );
   `;
-  if (isPg) await db.exec(schema);
-  else await db.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
+  if (isPg) await dbInstance.exec(schema);
+  else await dbInstance.exec(schema.replace(/SERIAL PRIMARY KEY/g, 'INTEGER PRIMARY KEY AUTOINCREMENT').replace(/EXTRACT\(EPOCH FROM NOW\(\)\)::INTEGER/g, 'unixepoch()'));
 
   const hash = bcrypt.hashSync('superadmin', 10);
   if (isPg) {
-    await db.prepare(`INSERT INTO users (email, name, password_hash, role, is_active, email_verified) 
+    await dbInstance.prepare(`INSERT INTO users (email, name, password_hash, role, is_active, email_verified) 
       VALUES ('admin@raphaguru.com', 'Administrador', $1, 'admin', 1, 1)
       ON CONFLICT (email) DO UPDATE SET password_hash = $1`).run(hash);
   } else {
-    await db.prepare(`INSERT OR REPLACE INTO users (email, name, password_hash, role, is_active, email_verified) 
+    await dbInstance.prepare(`INSERT OR REPLACE INTO users (email, name, password_hash, role, is_active, email_verified) 
       VALUES ('admin@raphaguru.com', 'Administrador', ?, 'admin', 1, 1)`).run(hash);
   }
 }
 
-export default db;
+export default dbInstance;
