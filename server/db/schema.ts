@@ -24,7 +24,7 @@ if (isProd && process.env.DATABASE_URL) {
 }
 
 // Objeto db definido globalmente para evitar undefined
-const dbObj = {
+const db = {
   prepare: (sql: string) => {
     if (isPg) {
       const pgSql = sql
@@ -70,7 +70,8 @@ const dbObj = {
   }
 };
 
-export const db = dbObj;
+export { db };
+export default db;
 
 export async function initDb() {
   const schema = `
@@ -99,5 +100,3 @@ export async function initDb() {
       VALUES ('admin@raphaguru.com', 'Administrador', ?, 'admin', 1, 1)`).run(hash);
   }
 }
-
-export default dbObj;
