@@ -57,7 +57,7 @@ async function startServer() {
   // Health check
   app.get('/api/health', (_req, res) => {
     res.json({ 
-      status: 'ok-v141', 
+      status: 'ok-v141-confirmed', 
       timestamp: new Date().toISOString(),
       db: 'sqlite-tmp'
     });
