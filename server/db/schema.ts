@@ -10,10 +10,12 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dir  = path.dirname(fileURLToPath(import.meta.url));
-const DATA   = path.resolve(process.cwd(), 'data');
+const DATA   = process.env.NODE_ENV === 'production' ? '/app/data' : path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA, 'rapha.db');
 
-fs.mkdirSync(DATA, { recursive: true });
+if (!fs.existsSync(DATA)) {
+  fs.mkdirSync(DATA, { recursive: true });
+}
 
 export const db = new Database(DB_FILE);
 
