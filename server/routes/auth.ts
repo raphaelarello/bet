@@ -9,12 +9,12 @@
  */
 
 import { Router } from 'express';
-import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import db from '../db/schema.js';
 import { signToken, requireAuth } from '../middleware/auth.js';
 
 const router = Router();
-const SALT = 12;
+const SALT_ROUNDS = 10;
 
 // ── Registro ──────────────────────────────────────────────────
 router.post('/register', async (req, res) => {
@@ -33,11 +33,13 @@ router.post('/register', async (req, res) => {
     const exists = db.prepare(`SELECT id FROM users WHERE email = ?`).get(email.toLowerCase());
     if (exists) return res.status(409).json({ error: 'Email já cadastrado' });
 
-    const hash = await bcrypt.hash(password, SALT);
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+    const password_hash = `${salt}:${hash}`;
     const result = db.prepare(`
       INSERT INTO users (email, name, password_hash, phone, role)
       VALUES (?, ?, ?, ?, 'free')
-    `).run(email.toLowerCase(), name.trim(), hash, phone ?? null) as { lastInsertRowid: number };
+    `).run(email.toLowerCase(), name.trim(), password_hash, phone ?? null) as { lastInsertRowid: number };
 
     const userId = result.lastInsertRowid;
 
@@ -78,7 +80,9 @@ router.post('/login', async (req, res) => {
     if (!user) return res.status(401).json({ error: 'Email ou senha incorretos' });
     if (!user.is_active) return res.status(403).json({ error: 'Conta desativada' });
 
-    const valid = await bcrypt.compare(password, user.password_hash);
+    const [salt, storedHash] = user.password_hash.split(':');
+    const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+    const valid = hash === storedHash;
     if (!valid) return res.status(401).json({ error: 'Email ou senha incorretos' });
 
     db.prepare(`UPDATE users SET last_login_at = unixepoch(), login_count = login_count + 1 WHERE id = ?`).run(user.id);
@@ -161,11 +165,15 @@ router.post('/change-password', requireAuth, async (req, res) => {
   if (novo.length < 8) return res.status(400).json({ error: 'Mínimo 8 caracteres' });
 
   const user = db.prepare(`SELECT password_hash FROM users WHERE id = ?`).get(req.user!.id) as { password_hash: string };
-  if (!await bcrypt.compare(current, user.password_hash))
+  const [salt_old, storedHash_old] = user.password_hash.split(':');
+  const hash_old = crypto.pbkdf2Sync(current, salt_old, 1000, 64, 'sha512').toString('hex');
+  if (hash_old !== storedHash_old)
     return res.status(400).json({ error: 'Senha atual incorreta' });
 
-  const hash = await bcrypt.hash(novo, SALT);
-  db.prepare(`UPDATE users SET password_hash = ?, updated_at = unixepoch() WHERE id = ?`).run(hash, req.user!.id);
+  const salt_new = crypto.randomBytes(16).toString('hex');
+  const hash_new = crypto.pbkdf2Sync(novo, salt_new, 1000, 64, 'sha512').toString('hex');
+  const password_hash_new = `${salt_new}:${hash_new}`;
+  db.prepare(`UPDATE users SET password_hash = ?, updated_at = unixepoch() WHERE id = ?`).run(password_hash_new, req.user!.id);
   db.prepare(`DELETE FROM sessions WHERE user_id = ? AND jti != ?`).run(req.user!.id, req.user!.jti);
 
   res.json({ ok: true, message: 'Senha alterada. Outros dispositivos foram deslogados.' });
@@ -207,9 +215,11 @@ router.post('/reset-password', async (req, res) => {
 
   if (!user) return res.status(400).json({ error: 'Token inválido ou expirado' });
 
-  const hash = await bcrypt.hash(password, SALT);
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+  const password_hash = `${salt}:${hash}`;
   db.prepare(`UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL, updated_at = unixepoch() WHERE id = ?`)
-    .run(hash, user.id);
+    .run(password_hash, user.id);
   db.prepare(`DELETE FROM sessions WHERE user_id = ?`).run(user.id);
 
   res.json({ ok: true, message: 'Senha redefinida com sucesso!' });
@@ -245,17 +255,18 @@ router.post('/reset-admin', async (req, res) => {
     return res.status(403).json({ error: 'Secret incorreto' });
   }
 
-  // SALT=10 para endpoint de emergência (mais rápido que 12, ainda seguro)
-  const hash = await bcrypt.hash('superadmin', 10);
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync('superadmin', salt, 1000, 64, 'sha512').toString('hex');
+  const password_hash = `${salt}:${hash}`;
   const existing = db.prepare(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`).get() as { id: number } | undefined;
 
   if (existing) {
-    db.prepare(`UPDATE users SET password_hash = ?, is_active = 1, email = 'admin@raphaguru.com' WHERE role = 'admin'`).run(hash);
+    db.prepare(`UPDATE users SET password_hash = ?, is_active = 1, email = 'admin@raphaguru.com' WHERE role = 'admin'`).run(password_hash);
     db.prepare(`DELETE FROM sessions WHERE user_id = ?`).run(existing.id);
     console.log('[AUTH] Senha admin resetada para: superadmin');
     return res.json({ ok: true, message: 'Senha admin resetada para: superadmin', email: 'admin@raphaguru.com' });
   } else {
-    db.prepare(`INSERT INTO users (email, name, password_hash, role, is_active, email_verified) VALUES ('admin@raphaguru.com', 'Administrador', ?, 'admin', 1, 1)`).run(hash);
+    db.prepare(`INSERT INTO users (email, name, password_hash, role, is_active, email_verified) VALUES ('admin@raphaguru.com', 'Administrador', ?, 'admin', 1, 1)`).run(password_hash);
     const adminId = (db.prepare(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`).get() as { id: number }).id;
     db.prepare(`INSERT INTO subscriptions (user_id, plan_slug, status, billing_cycle, amount_brl, period_start) VALUES (?, 'elite', 'active', 'monthly', 0, unixepoch())`).run(adminId);
     return res.json({ ok: true, message: 'Admin criado com senha: superadmin', email: 'admin@raphaguru.com' });
