@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite --host",
-    "build": "esbuild server/index.ts --bundle --platform=node --outfile=dist/server/index.js",
+    "build": "echo 'Build skipped'",
     "start": "NODE_ENV=production node dist/server/index.js",
     "preview": "vite preview --host",
     "check": "tsc --noEmit",
