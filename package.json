@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite --host",
-    "build": "echo 'Build skipped'",
+    "build": "pnpm rebuild better-sqlite3",
     "start": "pnpm tsx server/index.ts",
     "preview": "vite preview --host",
     "check": "tsc --noEmit",
