@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite --host",
-    "build": "pnpm install --frozen-lockfile && pnpm rebuild better-sqlite3",
+    "build": "pnpm install --frozen-lockfile && pnpm rebuild better-sqlite3 && pnpm build",
     "start": "pnpm tsx server/index.ts",
     "preview": "vite preview --host",
     "check": "tsc --noEmit",
