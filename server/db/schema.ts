@@ -4,7 +4,7 @@
  */
 
 import Database from 'better-sqlite3';
-import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -174,7 +174,7 @@ seedPlans();
 // ── Seed admin ────────────────────────────────────────────────
 // ── Admin: sempre recria garantindo senha correta ─────────────
 (function ensureAdmin() {
-  const hash = bcrypt.hashSync('superadmin', 10);
+  const hash = crypto.createHash('sha256').update('superadmin').digest('hex');
 
   // Remove admin antigo e recria (garante e-mail e senha corretos)
   db.prepare(`DELETE FROM users WHERE role = 'admin'`).run();
