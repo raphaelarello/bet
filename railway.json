@@ -5,7 +5,7 @@
     "buildCommand": "pnpm install --frozen-lockfile"
   },
   "deploy": {
-    "startCommand": "tsx server/index.ts",
+    "startCommand": "pnpm tsx server/index.ts",
     "restartPolicyType": "on_failure",
     "restartPolicyMaxRetries": 10
   },
