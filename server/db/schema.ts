@@ -97,6 +97,24 @@ export function initDb() {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id    INTEGER NOT NULL,
+      jti        TEXT    NOT NULL UNIQUE,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS usage_logs (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id    INTEGER NOT NULL,
+      action     TEXT    NOT NULL,
+      ip_address TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
   `);
 
   // Garante planos básicos

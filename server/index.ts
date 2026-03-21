@@ -57,7 +57,7 @@ async function startServer() {
   // Health check
   app.get('/api/health', (_req, res) => {
     res.json({ 
-      status: 'ok-v141-confirmed', 
+      status: 'ok-v142-final-fix', 
       timestamp: new Date().toISOString(),
       db: 'sqlite-tmp'
     });
@@ -77,7 +77,7 @@ async function startServer() {
 
   const port = process.env.PORT || 3000;
   server.listen(port, () => {
-    console.log(`Servidor v141 rodando na porta ${port}`);
+    console.log(`Servidor v142 rodando na porta ${port}`);
   });
 }
 
