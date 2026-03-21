@@ -13,29 +13,6 @@ const SPORTSDB_BASE = 'https://www.thesportsdb.com/api/v1/json/123';
 const CORS_PROXY = 'https://corsproxy.io/?';
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
 
-// Mapeamento de IDs ESPN para IDs TheSportsDB (para buscar histórico)
-const ESPN_LEAGUE_PROFILES: Record<string, { avgGoals: number; avgCards: number; avgCorners: number; aggressionFactor: number }> = {
-  '3918': { avgGoals: 2.82, avgCards: 3.2, avgCorners: 10.5, aggressionFactor: 0.85 },
-  '740':  { avgGoals: 2.52, avgCards: 4.1, avgCorners: 9.8, aggressionFactor: 1.1 },
-  '720':  { avgGoals: 3.05, avgCards: 3.0, avgCorners: 10.2, aggressionFactor: 0.8 },
-  '730':  { avgGoals: 2.65, avgCards: 4.3, avgCorners: 9.5, aggressionFactor: 1.15 },
-  '710':  { avgGoals: 2.71, avgCards: 3.8, avgCorners: 9.7, aggressionFactor: 1.0 },
-  '23':   { avgGoals: 2.95, avgCards: 3.3, avgCorners: 10.8, aggressionFactor: 0.9 },
-  '2':    { avgGoals: 2.75, avgCards: 3.5, avgCorners: 10.2, aggressionFactor: 0.95 },
-  '40':   { avgGoals: 2.74, avgCards: 3.4, avgCorners: 10.1, aggressionFactor: 0.93 },
-  '770':  { avgGoals: 2.85, avgCards: 3.1, avgCorners: 10.0, aggressionFactor: 0.9 },
-  '760':  { avgGoals: 2.60, avgCards: 4.2, avgCorners: 9.3, aggressionFactor: 1.1 },
-  '4351': { avgGoals: 2.45, avgCards: 4.5, avgCorners: 9.0, aggressionFactor: 1.2 },
-  '21231': { avgGoals: 2.87, avgCards: 4.0, avgCorners: 9.7, aggressionFactor: 1.0 },
-  '8316': { avgGoals: 2.54, avgCards: 3.7, avgCorners: 8.9, aggressionFactor: 0.96 },
-  '3906': { avgGoals: 2.96, avgCards: 3.4, avgCorners: 10.6, aggressionFactor: 0.88 },
-  '18992': { avgGoals: 3.08, avgCards: 2.9, avgCorners: 10.1, aggressionFactor: 0.82 },
-  '23537': { avgGoals: 2.73, avgCards: 4.0, avgCorners: 9.4, aggressionFactor: 1.02 },
-  '15':   { avgGoals: 2.58, avgCards: 3.9, avgCorners: 8.8, aggressionFactor: 0.98 },
-  '30':   { avgGoals: 2.47, avgCards: 3.8, avgCorners: 8.7, aggressionFactor: 0.99 },
-  '31':   { avgGoals: 2.64, avgCards: 3.6, avgCorners: 8.9, aggressionFactor: 0.94 },
-};
-
 // Cache ESPN
 const espnCache = new Map<string, { data: unknown; timestamp: number }>();
 const ESPN_CACHE_TTL = 10 * 60 * 1000;
@@ -128,67 +105,202 @@ export async function fetchMatchMarketOdds(eventId: string): Promise<AnalysisMar
 }
 
 // Busca histórico de um time via ESPN
+// ============================================================
+// HISTÓRICO MULTI-TEMPORADA ESPN
+// Busca até 3 temporadas em paralelo (atual + 2 anteriores) e
+// extrai corners e cartões do summary de cada evento (quando disponível no cache).
+// Retorna os 30 jogos mais recentes para alimentar calculateTeamStats.
+// ============================================================
+
+// Cache de stats por evento (corners/cartões do summary)
+const eventStatsCache = new Map<string, { corners: number; yellowCards: number; redCards: number }>();
+
+async function fetchESPNEventStats(eventId: string, teamId: string): Promise<{ corners: number; yellowCards: number; redCards: number }> {
+  const cached = eventStatsCache.get(`${eventId}_${teamId}`);
+  if (cached) return cached;
+
+  try {
+    const data = await fetchESPN<Record<string, unknown>>(`${ESPN_BASE}/all/summary?event=${eventId}`);
+    if (!data) return { corners: 0, yellowCards: 0, redCards: 0 };
+
+    const boxscore = data.boxscore as Record<string, unknown> | undefined;
+    const teams = (boxscore?.teams as Record<string, unknown>[]) || [];
+
+    const get = (teamData: Record<string, unknown>, label: string): number => {
+      const stats = (teamData.statistics as Record<string, unknown>[]) || [];
+      const s = stats.find(s => String(s.label || s.name || '').toLowerCase().includes(label.toLowerCase()));
+      if (!s) return 0;
+      return parseFloat(String(s.displayValue || s.value || '0')) || 0;
+    };
+
+    let corners = 0;
+    let yellowCards = 0;
+    let redCards = 0;
+
+    for (const teamData of teams) {
+      const td = teamData as Record<string, unknown>;
+      const tTeam = td.team as Record<string, unknown> | undefined;
+      const isMyTeam = String(tTeam?.id || '') === teamId;
+      if (!isMyTeam) continue;
+      corners    = get(td, 'corner');
+      yellowCards = get(td, 'yellow');
+      redCards   = get(td, 'red');
+    }
+
+    const stats = { corners, yellowCards, redCards };
+    eventStatsCache.set(`${eventId}_${teamId}`, stats);
+    return stats;
+  } catch {
+    return { corners: 0, yellowCards: 0, redCards: 0 };
+  }
+}
+
+function parseESPNScheduleEvents(
+  events: Record<string, unknown>[],
+  espnTeamId: string,
+): RecentMatch[] {
+  const results: RecentMatch[] = [];
+
+  for (const event of events) {
+    const competitions = (event.competitions as Record<string, unknown>[]) || [];
+    if (!competitions.length) continue;
+    const comp = competitions[0] as Record<string, unknown>;
+    const statusType = ((comp.status as Record<string, unknown>)?.type as Record<string, unknown>) || {};
+    const statusDesc = (statusType.description as string) || '';
+    if (statusDesc !== 'Full Time' && statusDesc !== 'Final') continue;
+
+    const competitors = (comp.competitors as Record<string, unknown>[]) || [];
+    const homeTeam = competitors.find(t => (t as Record<string, unknown>).homeAway === 'home') as Record<string, unknown> | undefined;
+    const awayTeam = competitors.find(t => (t as Record<string, unknown>).homeAway === 'away') as Record<string, unknown> | undefined;
+    if (!homeTeam || !awayTeam) continue;
+
+    const getScore = (c: Record<string, unknown>): number => {
+      const s = c.score;
+      if (!s) return 0;
+      if (typeof s === 'object' && s !== null) return Number((s as Record<string, unknown>).value || 0);
+      return Number(s) || 0;
+    };
+
+    const homeScore = getScore(homeTeam);
+    const awayScore = getScore(awayTeam);
+    const homeTeamData = homeTeam.team as Record<string, unknown>;
+    const awayTeamData = awayTeam.team as Record<string, unknown>;
+    const isHome = String(homeTeamData?.id || '') === espnTeamId;
+    const myScore = isHome ? homeScore : awayScore;
+    const oppScore = isHome ? awayScore : homeScore;
+    let result: 'W' | 'D' | 'L' = 'D';
+    if (myScore > oppScore) result = 'W';
+    else if (myScore < oppScore) result = 'L';
+
+    const dateStr = (event.date as string || '').slice(0, 10);
+    const eventId = String(event.id || '');
+
+    // Tenta extrair corners/cartões inline (quando ESPN inclui no schedule)
+    const stats = (comp.statistics as Record<string, unknown>[]) || [];
+    const getInlineStat = (label: string) => {
+      const s = stats.find(s => String((s as Record<string, unknown>).label || '').toLowerCase().includes(label));
+      return s ? parseFloat(String((s as Record<string, unknown>).value || '0')) || 0 : 0;
+    };
+
+    results.push({
+      idEvent: eventId,
+      strEvent: `${homeTeamData?.displayName} vs ${awayTeamData?.displayName}`,
+      dateEvent: dateStr,
+      homeTeam: String(homeTeamData?.displayName || ''),
+      awayTeam: String(awayTeamData?.displayName || ''),
+      homeScore,
+      awayScore,
+      isHome,
+      result,
+      totalGoals: homeScore + awayScore,
+      corners: getInlineStat('corner'),
+      yellowCards: getInlineStat('yellow'),
+      redCards: getInlineStat('red'),
+    });
+  }
+
+  return results;
+}
+
 export async function getTeamHistoryESPN(espnTeamId: string, espnLeagueId?: string): Promise<RecentMatch[]> {
   if (!espnTeamId) return [];
+
+  // Calcula as 3 temporadas a buscar (atual + 2 anteriores)
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  // Temporada europeia começa em agosto — se antes de agosto, temporada atual = ano-1
+  const baseSeason = currentMonth < 8 ? currentYear - 1 : currentYear;
+  const seasons = [baseSeason, baseSeason - 1, baseSeason - 2];
+
   try {
-    const season = new Date().getFullYear() - 1; // temporada atual
-    const data = await fetchESPN<{ events: Record<string, unknown>[] }>(
-      `${ESPN_BASE}/all/teams/${espnTeamId}/schedule?season=${season}`
+    // Busca todas as temporadas em paralelo
+    const seasonPromises = seasons.map(season =>
+      fetchESPN<{ events: Record<string, unknown>[] }>(
+        `${ESPN_BASE}/all/teams/${espnTeamId}/schedule?season=${season}`
+      )
     );
-    if (!data?.events) return [];
-    
-    const results: RecentMatch[] = [];
-    for (const event of data.events) {
-      const competitions = (event.competitions as Record<string, unknown>[]) || [];
-      if (!competitions.length) continue;
-      const comp = competitions[0] as Record<string, unknown>;
-      const statusType = ((comp.status as Record<string, unknown>)?.type as Record<string, unknown>) || {};
-      const statusDesc = (statusType.description as string) || '';
-      if (statusDesc !== 'Full Time' && statusDesc !== 'Final') continue;
-      
-      const competitors = (comp.competitors as Record<string, unknown>[]) || [];
-      const homeTeam = competitors.find(t => (t as Record<string, unknown>).homeAway === 'home') as Record<string, unknown> | undefined;
-      const awayTeam = competitors.find(t => (t as Record<string, unknown>).homeAway === 'away') as Record<string, unknown> | undefined;
-      if (!homeTeam || !awayTeam) continue;
-      
-      const getScore = (c: Record<string, unknown>): number => {
-        const s = c.score;
-        if (!s) return 0;
-        if (typeof s === 'object' && s !== null) return Number((s as Record<string, unknown>).value || 0);
-        return Number(s) || 0;
-      };
-      
-      const homeScore = getScore(homeTeam);
-      const awayScore = getScore(awayTeam);
-      const homeTeamData = homeTeam.team as Record<string, unknown>;
-      const awayTeamData = awayTeam.team as Record<string, unknown>;
-      const isHome = String(homeTeamData?.id || '') === espnTeamId;
-      const myScore = isHome ? homeScore : awayScore;
-      const oppScore = isHome ? awayScore : homeScore;
-      let result: 'W' | 'D' | 'L' = 'D';
-      if (myScore > oppScore) result = 'W';
-      else if (myScore < oppScore) result = 'L';
-      
-      const dateStr = (event.date as string || '').slice(0, 10);
-      results.push({
-        idEvent: String(event.id || ''),
-        strEvent: `${homeTeamData?.displayName} vs ${awayTeamData?.displayName}`,
-        dateEvent: dateStr,
-        homeTeam: String(homeTeamData?.displayName || ''),
-        awayTeam: String(awayTeamData?.displayName || ''),
-        homeScore,
-        awayScore,
-        isHome,
-        result,
-        totalGoals: homeScore + awayScore,
-        corners: 0,
-        yellowCards: 0,
-        redCards: 0,
-      });
+
+    const seasonResults = await Promise.allSettled(seasonPromises);
+
+    const allEvents: Record<string, unknown>[] = [];
+    for (const r of seasonResults) {
+      if (r.status === 'fulfilled' && r.value?.events) {
+        allEvents.push(...r.value.events);
+      }
     }
-    
-    // Retorna os 15 mais recentes (já estão ordenados do mais recente para mais antigo)
-    return results.slice(0, 15);
+
+    if (allEvents.length === 0) return [];
+
+    // Ordena por data DESC (mais recente primeiro) e remove duplicatas
+    const seenIds = new Set<string>();
+    const uniqueEvents = allEvents
+      .filter(e => {
+        const id = String(e.id || '');
+        if (seenIds.has(id)) return false;
+        seenIds.add(id);
+        return true;
+      })
+      .sort((a, b) => {
+        const da = (a.date as string || '').slice(0, 10);
+        const db = (b.date as string || '').slice(0, 10);
+        return db.localeCompare(da);
+      });
+
+    // Converte para RecentMatch (extrai corners/cartões inline quando disponível)
+    const parsed = parseESPNScheduleEvents(uniqueEvents, espnTeamId);
+
+    // Enriquece os 15 mais recentes com corners/cartões do ESPN summary
+    // Executa em lotes de 4 paralelos para não saturar a API
+    // Bloqueia até os primeiros 8 (dados críticos para o modelo), demais são fire-and-forget
+    const needEnrich = parsed.slice(0, 15).filter(m => m.corners === 0 && m.yellowCards === 0);
+    if (needEnrich.length > 0) {
+      const batchSize = 4;
+      const criticalBatch  = needEnrich.slice(0, 8);   // aguarda estes
+      const remainingBatch = needEnrich.slice(8);       // fire-and-forget
+
+      const applyStats = (m: RecentMatch) =>
+        fetchESPNEventStats(m.idEvent, espnTeamId).then(stats => {
+          if (stats.corners > 0 || stats.yellowCards > 0) {
+            m.corners     = stats.corners;
+            m.yellowCards = stats.yellowCards;
+            m.redCards    = stats.redCards;
+          }
+        });
+
+      // Processa em lotes para não abrir 8 conexões simultâneas
+      for (let i = 0; i < criticalBatch.length; i += batchSize) {
+        await Promise.allSettled(criticalBatch.slice(i, i + batchSize).map(applyStats));
+      }
+
+      // Fire-and-forget para os demais
+      if (remainingBatch.length > 0) {
+        Promise.allSettled(remainingBatch.map(applyStats)).catch(() => undefined);
+      }
+    }
+
+    // Retorna os 30 mais recentes — com stats enriquecidos para os 15 primeiros
+    return parsed.slice(0, 30);
   } catch {
     return [];
   }
@@ -218,144 +330,141 @@ async function fetchApi<T>(url: string): Promise<T> {
 // ============================================================
 // LEAGUE CONFIGURATION
 // ============================================================
-export const FEATURED_LEAGUES = [
-  // Top 5 Europa
-  { id: '3918', name: 'Premier League',       country: 'Inglaterra',    flag: '🏴',  code: 'PL'  },
-  { id: '740',  name: 'La Liga',              country: 'Espanha',       flag: '🇪🇸', code: 'LL'  },
-  { id: '720',  name: 'Bundesliga',           country: 'Alemanha',      flag: '🇩🇪', code: 'BL'  },
-  { id: '730',  name: 'Serie A',              country: 'Itália',        flag: '🇮🇹', code: 'SA'  },
-  { id: '710',  name: 'Ligue 1',             country: 'França',        flag: '🇫🇷', code: 'L1'  },
-  // 2ªs divisões europeias
-  { id: '3919', name: 'Championship',         country: 'Inglaterra',    flag: '🏴',  code: 'CH'  },
-  { id: '3927', name: '2. Bundesliga',        country: 'Alemanha',      flag: '🇩🇪', code: 'BL2' },
-  { id: '3921', name: 'Segunda División',     country: 'Espanha',       flag: '🇪🇸', code: 'SD'  },
-  { id: '3931', name: 'Ligue 2',             country: 'França',        flag: '🇫🇷', code: 'L2'  },
-  { id: '3930', name: 'Serie B',             country: 'Itália',        flag: '🇮🇹', code: 'SB'  },
-  // Outras europeias relevantes
-  { id: '725',  name: 'Eredivisie',           country: 'Holanda',       flag: '🇳🇱', code: 'ERE' },
-  { id: '715',  name: 'Primeira Liga',        country: 'Portugal',      flag: '🇵🇹', code: 'PPL' },
-  { id: '750',  name: 'Süper Lig',           country: 'Turquia',       flag: '🇹🇷', code: 'SL'  },
-  { id: '755',  name: 'Pro League',           country: 'Bélgica',       flag: '🇧🇪', code: 'BPL' },
-  { id: '735',  name: 'Scottish Premiership', country: 'Escócia',       flag: '🏴󠁧󠁢󠁳󠁣󠁴󠁿', code: 'SPL' },
-  { id: '3924', name: 'Bundesliga',           country: 'Áustria',       flag: '🇦🇹', code: 'ABL' },
-  { id: '3922', name: 'Super League',         country: 'Grécia',        flag: '🇬🇷', code: 'GSL' },
-  { id: '3926', name: 'Superligaen',          country: 'Dinamarca',     flag: '🇩🇰', code: 'DSL' },
-  { id: '3933', name: 'Ekstraklasa',          country: 'Polônia',       flag: '🇵🇱', code: 'EKS' },
-  { id: '3938', name: 'Allsvenskan',          country: 'Suécia',        flag: '🇸🇪', code: 'ALL' },
-  { id: '3939', name: 'Super League',         country: 'Suíça',         flag: '🇨🇭', code: 'SSL' },
-  { id: '4326', name: 'Eliteserien',          country: 'Noruega',       flag: '🇳🇴', code: 'ELS' },
-  // Competições europeias
-  { id: '23',   name: 'Champions League',     country: 'Europa',        flag: '🏆',  code: 'UCL' },
-  { id: '2',    name: 'Europa League',        country: 'Europa',        flag: '🏆',  code: 'UEL' },
-  { id: '40',   name: 'Conference League',    country: 'Europa',        flag: '🏆',  code: 'UECL'},
-  // Américas
-  { id: '4351', name: 'Brasileirão Série A',  country: 'Brasil',        flag: '🇧🇷', code: 'BRA' },
-  { id: '4352', name: 'Brasileirão Série B',  country: 'Brasil',        flag: '🇧🇷', code: 'BR2' },
-  { id: '630',  name: 'Copa do Brasil',       country: 'Brasil',        flag: '🇧🇷', code: 'CDB' },
-  { id: '21',   name: 'Libertadores',         country: 'América do Sul',flag: '🌎',  code: 'LIB' },
-  { id: '22',   name: 'Sudamericana',         country: 'América do Sul',flag: '🌎',  code: 'SUD' },
-  { id: '4356', name: 'Primera División',     country: 'Argentina',     flag: '🇦🇷', code: 'ARG' },
-  { id: '4358', name: 'Primera División',     country: 'Chile',         flag: '🇨🇱', code: 'CHI' },
-  { id: '4357', name: 'Liga BetPlay',         country: 'Colômbia',      flag: '🇨🇴', code: 'COL' },
-  { id: '4355', name: 'Primera División',     country: 'Uruguai',       flag: '🇺🇾', code: 'URU' },
-  { id: '770',  name: 'MLS',                  country: 'Estados Unidos', flag: '🇺🇸', code: 'MLS' },
-  { id: '760',  name: 'Liga MX',             country: 'México',        flag: '🇲🇽', code: 'LMX' },
-  // Ásia e Oriente Médio
-  { id: '21231',name: 'Saudi Pro League',     country: 'Arábia Saudita',flag: '🇸🇦', code: 'SPL' },
-  { id: '4803', name: 'J1 League',            country: 'Japão',         flag: '🇯🇵', code: 'J1'  },
-  { id: '4804', name: 'K League 1',           country: 'Coreia do Sul', flag: '🇰🇷', code: 'KL1' },
-  { id: '4820', name: 'Qatar Stars League',   country: 'Catar',         flag: '🇶🇦', code: 'QSL' },
-  { id: '4821', name: 'UAE Pro League',       country: 'Emirados',      flag: '🇦🇪', code: 'UAE' },
-  { id: '8316', name: 'Indian Super League',  country: 'Índia',         flag: '🇮🇳', code: 'ISL' },
-  // Oceania
-  { id: '3906', name: 'A-League',             country: 'Austrália',     flag: '🇦🇺', code: 'ALM' },
-  { id: '18992',name: 'A-League Women',       country: 'Austrália',     flag: '🇦🇺', code: 'ALW' },
-  // Seleções
-  { id: '15',   name: 'AFC Asian Cup',        country: 'Ásia',          flag: '🌏',  code: 'AAC' },
-  { id: '30',   name: 'AFC Eliminatórias',    country: 'Ásia',          flag: '🌏',  code: 'AFQ' },
-  { id: '31',   name: 'OFC Eliminatórias',    country: 'Oceania',       flag: '🌊',  code: 'OFQ' },
-  { id: '23537',name: 'AFC Championship',     country: 'Ásia',          flag: '🌏',  code: 'AFC' },
-];
+// FEATURED_LEAGUES moved to leagues.ts to prevent cross-chunk TDZ in Rollup
+export { FEATURED_LEAGUES } from './leagues';
 
 // League-specific averages for better calibration
-const LEAGUE_PROFILES: Record<string, { avgGoals: number; avgCards: number; avgCorners: number; aggressionFactor: number }> = {
+// homeAdv = multiplicador de vantagem em casa por liga (baseado em dados históricos reais)
+// Ligas físicas (Sul América, Turquia, Grécia) = 1.18-1.22 | Top 5 = 1.10-1.14
+const LEAGUE_PROFILES: Record<string, { avgGoals: number; avgCards: number; avgCorners: number; aggressionFactor: number; homeAdv: number }> = {
   // Europa — Top 5
-  '3918': { avgGoals: 2.82, avgCards: 3.2, avgCorners: 10.5, aggressionFactor: 0.85 },
-  '740':  { avgGoals: 2.52, avgCards: 4.1, avgCorners: 9.8,  aggressionFactor: 1.10 },
-  '720':  { avgGoals: 3.05, avgCards: 3.0, avgCorners: 10.2, aggressionFactor: 0.80 },
-  '730':  { avgGoals: 2.65, avgCards: 4.3, avgCorners: 9.5,  aggressionFactor: 1.15 },
-  '710':  { avgGoals: 2.71, avgCards: 3.8, avgCorners: 9.7,  aggressionFactor: 1.00 },
+  '3918': { avgGoals: 2.82, avgCards: 3.2, avgCorners: 10.5, aggressionFactor: 0.85, homeAdv: 1.14 }, // EPL
+  '740':  { avgGoals: 2.52, avgCards: 4.1, avgCorners: 9.8,  aggressionFactor: 1.10, homeAdv: 1.15 }, // La Liga
+  '720':  { avgGoals: 3.05, avgCards: 3.0, avgCorners: 10.2, aggressionFactor: 0.80, homeAdv: 1.12 }, // Bundesliga
+  '730':  { avgGoals: 2.65, avgCards: 4.3, avgCorners: 9.5,  aggressionFactor: 1.15, homeAdv: 1.16 }, // Serie A
+  '710':  { avgGoals: 2.71, avgCards: 3.8, avgCorners: 9.7,  aggressionFactor: 1.00, homeAdv: 1.13 }, // Ligue 1
   // Europa — 2ªs divisões
-  '3919': { avgGoals: 2.60, avgCards: 3.5, avgCorners: 10.1, aggressionFactor: 0.92 }, // Championship
-  '3927': { avgGoals: 2.88, avgCards: 3.2, avgCorners: 9.9,  aggressionFactor: 0.85 }, // 2. Bundesliga
-  '3921': { avgGoals: 2.41, avgCards: 4.4, avgCorners: 9.3,  aggressionFactor: 1.12 }, // Segunda División
-  '3931': { avgGoals: 2.55, avgCards: 4.0, avgCorners: 9.4,  aggressionFactor: 1.05 }, // Ligue 2
-  '3930': { avgGoals: 2.48, avgCards: 4.5, avgCorners: 9.1,  aggressionFactor: 1.18 }, // Serie B
+  '3919': { avgGoals: 2.60, avgCards: 3.5, avgCorners: 10.1, aggressionFactor: 0.92, homeAdv: 1.13 }, // Championship
+  '3927': { avgGoals: 2.88, avgCards: 3.2, avgCorners: 9.9,  aggressionFactor: 0.85, homeAdv: 1.11 }, // 2. Bundesliga
+  '3921': { avgGoals: 2.41, avgCards: 4.4, avgCorners: 9.3,  aggressionFactor: 1.12, homeAdv: 1.16 }, // Segunda División
+  '3931': { avgGoals: 2.55, avgCards: 4.0, avgCorners: 9.4,  aggressionFactor: 1.05, homeAdv: 1.14 }, // Ligue 2
+  '3930': { avgGoals: 2.48, avgCards: 4.5, avgCorners: 9.1,  aggressionFactor: 1.18, homeAdv: 1.17 }, // Serie B
   // Europa — Outras ligas
-  '725':  { avgGoals: 3.10, avgCards: 3.1, avgCorners: 10.3, aggressionFactor: 0.82 }, // Eredivisie
-  '715':  { avgGoals: 2.58, avgCards: 3.9, avgCorners: 9.6,  aggressionFactor: 1.05 }, // Primeira Liga
-  '750':  { avgGoals: 2.77, avgCards: 4.6, avgCorners: 9.4,  aggressionFactor: 1.20 }, // Süper Lig
-  '755':  { avgGoals: 2.92, avgCards: 3.6, avgCorners: 10.0, aggressionFactor: 0.92 }, // Pro League
-  '735':  { avgGoals: 2.68, avgCards: 3.5, avgCorners: 9.8,  aggressionFactor: 0.90 }, // Scottish Prem
-  '745':  { avgGoals: 2.61, avgCards: 4.2, avgCorners: 9.2,  aggressionFactor: 1.08 }, // Russian PL
-  '3924': { avgGoals: 2.85, avgCards: 3.4, avgCorners: 9.7,  aggressionFactor: 0.90 }, // Áustria
-  '3922': { avgGoals: 2.55, avgCards: 4.5, avgCorners: 9.0,  aggressionFactor: 1.18 }, // Grécia
-  '3923': { avgGoals: 2.60, avgCards: 3.8, avgCorners: 9.3,  aggressionFactor: 1.00 }, // Chéquia
-  '3926': { avgGoals: 2.72, avgCards: 3.5, avgCorners: 9.5,  aggressionFactor: 0.92 }, // Dinamarca
-  '3933': { avgGoals: 2.58, avgCards: 3.9, avgCorners: 9.2,  aggressionFactor: 1.02 }, // Polônia
-  '3936': { avgGoals: 2.50, avgCards: 4.1, avgCorners: 9.0,  aggressionFactor: 1.08 }, // Romênia
-  '3937': { avgGoals: 2.48, avgCards: 4.3, avgCorners: 9.1,  aggressionFactor: 1.10 }, // Sérvia
-  '3938': { avgGoals: 2.78, avgCards: 3.3, avgCorners: 9.6,  aggressionFactor: 0.88 }, // Suécia
-  '3939': { avgGoals: 2.85, avgCards: 3.2, avgCorners: 9.8,  aggressionFactor: 0.85 }, // Suíça
-  '3940': { avgGoals: 2.55, avgCards: 4.2, avgCorners: 9.1,  aggressionFactor: 1.10 }, // Ucrânia
-  '4326': { avgGoals: 2.90, avgCards: 3.2, avgCorners: 9.7,  aggressionFactor: 0.86 }, // Noruega
-  '4343': { avgGoals: 2.82, avgCards: 3.1, avgCorners: 9.5,  aggressionFactor: 0.87 }, // Finlândia
+  '725':  { avgGoals: 3.10, avgCards: 3.1, avgCorners: 10.3, aggressionFactor: 0.82, homeAdv: 1.12 }, // Eredivisie
+  '715':  { avgGoals: 2.58, avgCards: 3.9, avgCorners: 9.6,  aggressionFactor: 1.05, homeAdv: 1.14 }, // Primeira Liga
+  '750':  { avgGoals: 2.77, avgCards: 4.6, avgCorners: 9.4,  aggressionFactor: 1.20, homeAdv: 1.20 }, // Süper Lig
+  '755':  { avgGoals: 2.92, avgCards: 3.6, avgCorners: 10.0, aggressionFactor: 0.92, homeAdv: 1.12 }, // Pro League
+  '735':  { avgGoals: 2.68, avgCards: 3.5, avgCorners: 9.8,  aggressionFactor: 0.90, homeAdv: 1.13 }, // Scottish Prem
+  '745':  { avgGoals: 2.61, avgCards: 4.2, avgCorners: 9.2,  aggressionFactor: 1.08, homeAdv: 1.16 }, // Russian PL
+  '3924': { avgGoals: 2.85, avgCards: 3.4, avgCorners: 9.7,  aggressionFactor: 0.90, homeAdv: 1.13 }, // Áustria
+  '3922': { avgGoals: 2.55, avgCards: 4.5, avgCorners: 9.0,  aggressionFactor: 1.18, homeAdv: 1.18 }, // Grécia
+  '3923': { avgGoals: 2.60, avgCards: 3.8, avgCorners: 9.3,  aggressionFactor: 1.00, homeAdv: 1.14 }, // Chéquia
+  '3926': { avgGoals: 2.72, avgCards: 3.5, avgCorners: 9.5,  aggressionFactor: 0.92, homeAdv: 1.12 }, // Dinamarca
+  '3933': { avgGoals: 2.58, avgCards: 3.9, avgCorners: 9.2,  aggressionFactor: 1.02, homeAdv: 1.15 }, // Polônia
+  '3936': { avgGoals: 2.50, avgCards: 4.1, avgCorners: 9.0,  aggressionFactor: 1.08, homeAdv: 1.16 }, // Romênia
+  '3937': { avgGoals: 2.48, avgCards: 4.3, avgCorners: 9.1,  aggressionFactor: 1.10, homeAdv: 1.17 }, // Sérvia
+  '3938': { avgGoals: 2.78, avgCards: 3.3, avgCorners: 9.6,  aggressionFactor: 0.88, homeAdv: 1.11 }, // Suécia
+  '3939': { avgGoals: 2.85, avgCards: 3.2, avgCorners: 9.8,  aggressionFactor: 0.85, homeAdv: 1.11 }, // Suíça
+  '3940': { avgGoals: 2.55, avgCards: 4.2, avgCorners: 9.1,  aggressionFactor: 1.10, homeAdv: 1.17 }, // Ucrânia
+  '4326': { avgGoals: 2.90, avgCards: 3.2, avgCorners: 9.7,  aggressionFactor: 0.86, homeAdv: 1.12 }, // Noruega
+  '4343': { avgGoals: 2.82, avgCards: 3.1, avgCorners: 9.5,  aggressionFactor: 0.87, homeAdv: 1.11 }, // Finlândia
   // Competições europeias e globais
-  '23':   { avgGoals: 2.95, avgCards: 3.3, avgCorners: 10.8, aggressionFactor: 0.90 }, // UCL
-  '2':    { avgGoals: 2.80, avgCards: 3.5, avgCorners: 10.3, aggressionFactor: 0.93 }, // UEL
-  '40':   { avgGoals: 2.75, avgCards: 3.4, avgCorners: 10.1, aggressionFactor: 0.94 }, // UECL
-  '776':  { avgGoals: 2.80, avgCards: 3.5, avgCorners: 10.3, aggressionFactor: 0.93 },
-  '20296':{ avgGoals: 2.75, avgCards: 3.4, avgCorners: 10.1, aggressionFactor: 0.94 },
-  '21':   { avgGoals: 2.72, avgCards: 4.1, avgCorners: 9.6,  aggressionFactor: 1.05 }, // Libertadores
-  '22':   { avgGoals: 2.60, avgCards: 4.2, avgCorners: 9.3,  aggressionFactor: 1.08 }, // Sudamericana
+  '23':   { avgGoals: 2.95, avgCards: 3.3, avgCorners: 10.8, aggressionFactor: 0.90, homeAdv: 1.10 }, // UCL
+  '2':    { avgGoals: 2.80, avgCards: 3.5, avgCorners: 10.3, aggressionFactor: 0.93, homeAdv: 1.10 }, // UEL
+  '40':   { avgGoals: 2.75, avgCards: 3.4, avgCorners: 10.1, aggressionFactor: 0.94, homeAdv: 1.09 }, // UECL
+  '776':  { avgGoals: 2.80, avgCards: 3.5, avgCorners: 10.3, aggressionFactor: 0.93, homeAdv: 1.10 },
+  '20296':{ avgGoals: 2.75, avgCards: 3.4, avgCorners: 10.1, aggressionFactor: 0.94, homeAdv: 1.09 },
+  '21':   { avgGoals: 2.72, avgCards: 4.1, avgCorners: 9.6,  aggressionFactor: 1.05, homeAdv: 1.14 }, // Libertadores
+  '22':   { avgGoals: 2.60, avgCards: 4.2, avgCorners: 9.3,  aggressionFactor: 1.08, homeAdv: 1.14 }, // Sudamericana
   // Américas
-  '4351': { avgGoals: 2.45, avgCards: 4.5, avgCorners: 9.0,  aggressionFactor: 1.20 }, // Brasileirão A
-  '4352': { avgGoals: 2.38, avgCards: 4.6, avgCorners: 8.8,  aggressionFactor: 1.22 }, // Série B
-  '4353': { avgGoals: 2.30, avgCards: 4.7, avgCorners: 8.5,  aggressionFactor: 1.25 }, // Série C
-  '4356': { avgGoals: 2.68, avgCards: 4.4, avgCorners: 9.1,  aggressionFactor: 1.18 }, // Argentina
-  '4358': { avgGoals: 2.52, avgCards: 4.3, avgCorners: 8.9,  aggressionFactor: 1.15 }, // Chile
-  '4357': { avgGoals: 2.60, avgCards: 4.5, avgCorners: 8.8,  aggressionFactor: 1.20 }, // Colômbia
-  '4359': { avgGoals: 2.55, avgCards: 4.4, avgCorners: 8.7,  aggressionFactor: 1.18 }, // Peru
-  '4355': { avgGoals: 2.62, avgCards: 4.3, avgCorners: 8.9,  aggressionFactor: 1.15 }, // Uruguai
-  '4354': { avgGoals: 2.58, avgCards: 4.5, avgCorners: 8.8,  aggressionFactor: 1.20 }, // Venezuela
-  '4360': { avgGoals: 2.48, avgCards: 4.6, avgCorners: 8.6,  aggressionFactor: 1.22 }, // Bolívia
-  '770':  { avgGoals: 2.85, avgCards: 3.1, avgCorners: 10.0, aggressionFactor: 0.90 }, // MLS
-  '760':  { avgGoals: 2.60, avgCards: 4.2, avgCorners: 9.3,  aggressionFactor: 1.10 }, // Liga MX
-  '630':  { avgGoals: 2.50, avgCards: 4.4, avgCorners: 9.0,  aggressionFactor: 1.18 }, // Copa do Brasil
-  '660':  { avgGoals: 2.55, avgCards: 4.5, avgCorners: 8.8,  aggressionFactor: 1.20 }, // Ecuador
-  '8306': { avgGoals: 2.65, avgCards: 4.3, avgCorners: 8.9,  aggressionFactor: 1.15 }, // Carioca
+  '4351': { avgGoals: 2.45, avgCards: 4.5, avgCorners: 9.0,  aggressionFactor: 1.20, homeAdv: 1.20 }, // Brasileirão A
+  '4352': { avgGoals: 2.38, avgCards: 4.6, avgCorners: 8.8,  aggressionFactor: 1.22, homeAdv: 1.22 }, // Série B
+  '4353': { avgGoals: 2.30, avgCards: 4.7, avgCorners: 8.5,  aggressionFactor: 1.25, homeAdv: 1.24 }, // Série C
+  '4356': { avgGoals: 2.68, avgCards: 4.4, avgCorners: 9.1,  aggressionFactor: 1.18, homeAdv: 1.21 }, // Argentina
+  '4358': { avgGoals: 2.52, avgCards: 4.3, avgCorners: 8.9,  aggressionFactor: 1.15, homeAdv: 1.19 }, // Chile
+  '4357': { avgGoals: 2.60, avgCards: 4.5, avgCorners: 8.8,  aggressionFactor: 1.20, homeAdv: 1.21 }, // Colômbia
+  '4359': { avgGoals: 2.55, avgCards: 4.4, avgCorners: 8.7,  aggressionFactor: 1.18, homeAdv: 1.20 }, // Peru
+  '4355': { avgGoals: 2.62, avgCards: 4.3, avgCorners: 8.9,  aggressionFactor: 1.15, homeAdv: 1.19 }, // Uruguai
+  '4354': { avgGoals: 2.58, avgCards: 4.5, avgCorners: 8.8,  aggressionFactor: 1.20, homeAdv: 1.20 }, // Venezuela
+  '4360': { avgGoals: 2.48, avgCards: 4.6, avgCorners: 8.6,  aggressionFactor: 1.22, homeAdv: 1.22 }, // Bolívia
+  '770':  { avgGoals: 2.85, avgCards: 3.1, avgCorners: 10.0, aggressionFactor: 0.90, homeAdv: 1.13 }, // MLS
+  '760':  { avgGoals: 2.60, avgCards: 4.2, avgCorners: 9.3,  aggressionFactor: 1.10, homeAdv: 1.17 }, // Liga MX
+  '630':  { avgGoals: 2.50, avgCards: 4.4, avgCorners: 9.0,  aggressionFactor: 1.18, homeAdv: 1.18 }, // Copa do Brasil
+  '660':  { avgGoals: 2.55, avgCards: 4.5, avgCorners: 8.8,  aggressionFactor: 1.20, homeAdv: 1.20 }, // Ecuador
+  '8306': { avgGoals: 2.65, avgCards: 4.3, avgCorners: 8.9,  aggressionFactor: 1.15, homeAdv: 1.20 }, // Carioca
   // Ásia e Oceania
-  '21231':{ avgGoals: 2.87, avgCards: 4.0, avgCorners: 9.7,  aggressionFactor: 1.00 }, // Saudi
-  '8316': { avgGoals: 2.54, avgCards: 3.7, avgCorners: 8.9,  aggressionFactor: 0.96 }, // ISL
-  '3906': { avgGoals: 2.96, avgCards: 3.4, avgCorners: 10.6, aggressionFactor: 0.88 }, // A-League
-  '18992':{ avgGoals: 3.08, avgCards: 2.9, avgCorners: 10.1, aggressionFactor: 0.82 }, // A-League W
-  '23537':{ avgGoals: 2.73, avgCards: 4.0, avgCorners: 9.4,  aggressionFactor: 1.02 }, // AFC
-  '4803': { avgGoals: 2.80, avgCards: 3.2, avgCorners: 10.1, aggressionFactor: 0.85 }, // J1 League
-  '4804': { avgGoals: 2.65, avgCards: 3.5, avgCorners: 9.8,  aggressionFactor: 0.92 }, // K League
-  '4805': { avgGoals: 2.72, avgCards: 4.0, avgCorners: 9.5,  aggressionFactor: 1.05 }, // China SL
-  '4820': { avgGoals: 2.80, avgCards: 4.1, avgCorners: 9.3,  aggressionFactor: 1.05 }, // Qatar
-  '4821': { avgGoals: 2.75, avgCards: 4.0, avgCorners: 9.2,  aggressionFactor: 1.03 }, // UAE
+  '21231':{ avgGoals: 2.87, avgCards: 4.0, avgCorners: 9.7,  aggressionFactor: 1.00, homeAdv: 1.15 }, // Saudi
+  '8316': { avgGoals: 2.54, avgCards: 3.7, avgCorners: 8.9,  aggressionFactor: 0.96, homeAdv: 1.14 }, // ISL
+  '3906': { avgGoals: 2.96, avgCards: 3.4, avgCorners: 10.6, aggressionFactor: 0.88, homeAdv: 1.12 }, // A-League
+  '18992':{ avgGoals: 3.08, avgCards: 2.9, avgCorners: 10.1, aggressionFactor: 0.82, homeAdv: 1.10 }, // A-League W
+  '23537':{ avgGoals: 2.73, avgCards: 4.0, avgCorners: 9.4,  aggressionFactor: 1.02, homeAdv: 1.13 }, // AFC
+  '4803': { avgGoals: 2.80, avgCards: 3.2, avgCorners: 10.1, aggressionFactor: 0.85, homeAdv: 1.12 }, // J1 League
+  '4804': { avgGoals: 2.65, avgCards: 3.5, avgCorners: 9.8,  aggressionFactor: 0.92, homeAdv: 1.13 }, // K League
+  '4805': { avgGoals: 2.72, avgCards: 4.0, avgCorners: 9.5,  aggressionFactor: 1.05, homeAdv: 1.16 }, // China SL
+  '4820': { avgGoals: 2.80, avgCards: 4.1, avgCorners: 9.3,  aggressionFactor: 1.05, homeAdv: 1.18 }, // Qatar
+  '4821': { avgGoals: 2.75, avgCards: 4.0, avgCorners: 9.2,  aggressionFactor: 1.03, homeAdv: 1.17 }, // UAE
   // Eliminatórias e seleções
-  '15':   { avgGoals: 2.58, avgCards: 3.9, avgCorners: 8.8,  aggressionFactor: 0.98 },
-  '30':   { avgGoals: 2.47, avgCards: 3.8, avgCorners: 8.7,  aggressionFactor: 0.99 },
-  '31':   { avgGoals: 2.64, avgCards: 3.6, avgCorners: 8.9,  aggressionFactor: 0.94 },
-  '10':   { avgGoals: 2.55, avgCards: 4.2, avgCorners: 8.8,  aggressionFactor: 1.10 }, // CONMEBOL Elim
-  '11':   { avgGoals: 2.45, avgCards: 3.5, avgCorners: 9.0,  aggressionFactor: 0.95 }, // UEFA Elim
-  '8345': { avgGoals: 2.55, avgCards: 4.5, avgCorners: 8.7,  aggressionFactor: 1.18 }, // CAF CL
+  '15':   { avgGoals: 2.58, avgCards: 3.9, avgCorners: 8.8,  aggressionFactor: 0.98, homeAdv: 1.12 },
+  '30':   { avgGoals: 2.47, avgCards: 3.8, avgCorners: 8.7,  aggressionFactor: 0.99, homeAdv: 1.11 },
+  '31':   { avgGoals: 2.64, avgCards: 3.6, avgCorners: 8.9,  aggressionFactor: 0.94, homeAdv: 1.11 },
+  '10':   { avgGoals: 2.55, avgCards: 4.2, avgCorners: 8.8,  aggressionFactor: 1.10, homeAdv: 1.15 }, // CONMEBOL Elim
+  '11':   { avgGoals: 2.45, avgCards: 3.5, avgCorners: 9.0,  aggressionFactor: 0.95, homeAdv: 1.11 }, // UEFA Elim
+  '8345': { avgGoals: 2.55, avgCards: 4.5, avgCorners: 8.7,  aggressionFactor: 1.18, homeAdv: 1.19 }, // CAF CL
+  // ── Seleções nacionais e torneios FIFA ───────────────────────────────────
+  '4':    { avgGoals: 2.48, avgCards: 3.2, avgCorners: 9.4,  aggressionFactor: 0.92, homeAdv: 1.08 }, // FIFA World Cup
+  '7':    { avgGoals: 2.55, avgCards: 4.1, avgCorners: 8.9,  aggressionFactor: 1.10, homeAdv: 1.14 }, // Copa América
+  '9':    { avgGoals: 2.50, avgCards: 3.4, avgCorners: 9.2,  aggressionFactor: 0.95, homeAdv: 1.10 }, // UEFA Nations League
+  '12':   { avgGoals: 2.48, avgCards: 3.6, avgCorners: 8.8,  aggressionFactor: 0.98, homeAdv: 1.12 }, // CONCACAF Nations League
+  '13':   { avgGoals: 2.52, avgCards: 3.8, avgCorners: 8.6,  aggressionFactor: 1.02, homeAdv: 1.13 }, // CONCACAF Gold Cup
+  '14':   { avgGoals: 2.42, avgCards: 4.3, avgCorners: 8.4,  aggressionFactor: 1.12, homeAdv: 1.16 }, // Africa Cup of Nations
+  '16':   { avgGoals: 2.70, avgCards: 3.0, avgCorners: 9.1,  aggressionFactor: 0.88, homeAdv: 1.06 }, // FIFA Amistosos
+  '17':   { avgGoals: 2.44, avgCards: 3.3, avgCorners: 9.1,  aggressionFactor: 0.93, homeAdv: 1.09 }, // UEFA Euro
+  '18':   { avgGoals: 2.90, avgCards: 3.0, avgCorners: 10.2, aggressionFactor: 0.85, homeAdv: 1.07 }, // FIFA Club World Cup
+  '19':   { avgGoals: 2.55, avgCards: 3.2, avgCorners: 9.3,  aggressionFactor: 0.90, homeAdv: 1.08 }, // FIFA Confederations Cup
+  '20':   { avgGoals: 2.60, avgCards: 3.5, avgCorners: 9.0,  aggressionFactor: 0.95, homeAdv: 1.10 }, // CONCACAF Champions Cup
+  '26':   { avgGoals: 2.85, avgCards: 3.1, avgCorners: 9.8,  aggressionFactor: 0.88, homeAdv: 1.05 }, // UEFA Super Cup
+  '27':   { avgGoals: 2.75, avgCards: 3.0, avgCorners: 9.5,  aggressionFactor: 0.87, homeAdv: 1.05 }, // FIFA Intercontinental Cup
+  '28':   { avgGoals: 2.48, avgCards: 3.8, avgCorners: 8.8,  aggressionFactor: 1.00, homeAdv: 1.12 }, // CONCACAF Eliminatórias
+  '29':   { avgGoals: 2.42, avgCards: 4.0, avgCorners: 8.6,  aggressionFactor: 1.05, homeAdv: 1.14 }, // CAF Eliminatórias
+  // ── Copas nacionais europeias ─────────────────────────────────────────────
+  '3916': { avgGoals: 2.75, avgCards: 3.0, avgCorners: 9.8,  aggressionFactor: 0.85, homeAdv: 1.10 }, // FA Cup
+  '3920': { avgGoals: 2.85, avgCards: 3.2, avgCorners: 9.5,  aggressionFactor: 0.88, homeAdv: 1.10 }, // EFL Trophy
+  '3925': { avgGoals: 2.70, avgCards: 3.0, avgCorners: 9.7,  aggressionFactor: 0.85, homeAdv: 1.10 }, // DFB-Pokal
+  '3935': { avgGoals: 2.60, avgCards: 3.8, avgCorners: 9.5,  aggressionFactor: 1.05, homeAdv: 1.12 }, // Copa del Rey
+  '3947': { avgGoals: 2.62, avgCards: 4.0, avgCorners: 9.3,  aggressionFactor: 1.10, homeAdv: 1.12 }, // Coppa Italia
+  '3948': { avgGoals: 2.68, avgCards: 3.6, avgCorners: 9.4,  aggressionFactor: 0.98, homeAdv: 1.10 }, // Coupe de France
+  '3949': { avgGoals: 2.55, avgCards: 3.8, avgCorners: 9.2,  aggressionFactor: 1.02, homeAdv: 1.12 }, // Taça de Portugal
+  // ── Ligas europeias menores ───────────────────────────────────────────────
+  '3941': { avgGoals: 2.58, avgCards: 3.8, avgCorners: 9.1,  aggressionFactor: 1.00, homeAdv: 1.14 }, // Fortuna Liga Eslováquia
+  '3942': { avgGoals: 2.55, avgCards: 3.6, avgCorners: 9.0,  aggressionFactor: 0.96, homeAdv: 1.13 }, // PrvaLiga Eslovênia
+  '3943': { avgGoals: 2.50, avgCards: 4.0, avgCorners: 8.8,  aggressionFactor: 1.08, homeAdv: 1.16 }, // Primera División El Salvador
+  '3944': { avgGoals: 2.55, avgCards: 4.0, avgCorners: 9.0,  aggressionFactor: 1.06, homeAdv: 1.15 }, // Hrvatska liga (Croácia)
+  '3945': { avgGoals: 2.48, avgCards: 4.2, avgCorners: 8.8,  aggressionFactor: 1.10, homeAdv: 1.16 }, // Parva Liga (Bulgária)
+  '3946': { avgGoals: 2.60, avgCards: 3.2, avgCorners: 9.0,  aggressionFactor: 0.88, homeAdv: 1.12 }, // Úrvalsdeild (Islândia)
+  '20956':{ avgGoals: 2.42, avgCards: 4.3, avgCorners: 9.1,  aggressionFactor: 1.12, homeAdv: 1.16 }, // Primera Federación (Espanha 3ª)
+  '4300': { avgGoals: 2.55, avgCards: 3.3, avgCorners: 9.5,  aggressionFactor: 0.90, homeAdv: 1.12 }, // Welsh Premier League
+  // ── Américas adicionais ───────────────────────────────────────────────────
+  '650':  { avgGoals: 2.50, avgCards: 4.4, avgCorners: 8.9,  aggressionFactor: 1.18, homeAdv: 1.18 }, // Copa Colombia
+  '3928': { avgGoals: 2.55, avgCards: 4.5, avgCorners: 8.6,  aggressionFactor: 1.22, homeAdv: 1.20 }, // Liga Nacional Guatemala
+  '3929': { avgGoals: 2.50, avgCards: 4.6, avgCorners: 8.5,  aggressionFactor: 1.24, homeAdv: 1.22 }, // Liga Nacional Honduras
+  '3932': { avgGoals: 2.58, avgCards: 4.2, avgCorners: 9.1,  aggressionFactor: 1.12, homeAdv: 1.18 }, // Liga de Expansión MX
+  '3934': { avgGoals: 2.55, avgCards: 4.5, avgCorners: 8.7,  aggressionFactor: 1.20, homeAdv: 1.20 }, // División Profesional Paraguay
+  '4399': { avgGoals: 2.45, avgCards: 4.5, avgCorners: 9.0,  aggressionFactor: 1.20, homeAdv: 1.20 }, // Brasileirão Série A (ID alt.)
+  '4002': { avgGoals: 2.72, avgCards: 3.3, avgCorners: 9.8,  aggressionFactor: 0.92, homeAdv: 1.12 }, // USL Championship
+  '19915':{ avgGoals: 2.65, avgCards: 3.4, avgCorners: 9.5,  aggressionFactor: 0.94, homeAdv: 1.12 }, // USL League One
+  '23633':{ avgGoals: 2.68, avgCards: 3.2, avgCorners: 9.6,  aggressionFactor: 0.92, homeAdv: 1.11 }, // USL Super League
+  '5699': { avgGoals: 2.88, avgCards: 3.0, avgCorners: 10.0, aggressionFactor: 0.88, homeAdv: 1.10 }, // Leagues Cup (MLS vs Liga MX)
+  // ── Ásia adicionais ───────────────────────────────────────────────────────
+  '4822': { avgGoals: 2.72, avgCards: 4.0, avgCorners: 9.1,  aggressionFactor: 1.05, homeAdv: 1.18 }, // Kuwait Premier League
+  '18505':{ avgGoals: 2.65, avgCards: 3.5, avgCorners: 8.8,  aggressionFactor: 0.95, homeAdv: 1.14 }, // Durand Cup (Índia)
 };
 
-function getLeagueProfile(leagueId?: string) {
-  return LEAGUE_PROFILES[leagueId || ''] || { avgGoals: 2.65, avgCards: 3.5, avgCorners: 9.8, aggressionFactor: 1.0 };
+type LeagueProfile = { avgGoals: number; avgCards: number; avgCorners: number; aggressionFactor: number; homeAdv: number };
+const DEFAULT_LEAGUE_PROFILE: LeagueProfile = { avgGoals: 2.65, avgCards: 3.5, avgCorners: 9.8, aggressionFactor: 1.0, homeAdv: 1.12 };
+
+function getLeagueProfile(leagueId?: string): LeagueProfile {
+  if (!leagueId) return DEFAULT_LEAGUE_PROFILE;
+  return (LEAGUE_PROFILES as Record<string, LeagueProfile>)[leagueId] ?? DEFAULT_LEAGUE_PROFILE;
 }
 
 // ============================================================
@@ -396,6 +505,18 @@ export async function getTeamPróximoEvents(teamId: string): Promise<Match[]> {
 // ============================================================
 // MATH UTILITIES
 // ============================================================
+
+// Dixon-Coles (1997) tau correction for low-score cell adjustment.
+// Corrects systematic over/under-prediction of 0-0, 1-0, 0-1, 1-1 by independent Poisson.
+// rho = -0.13 is calibrated on large historical football datasets.
+const DC_RHO = -0.13;
+function dixonColesTau(x: number, y: number, lH: number, lA: number): number {
+  if (x === 0 && y === 0) return 1 - lH * lA * DC_RHO;
+  if (x === 1 && y === 0) return 1 + lA * DC_RHO;
+  if (x === 0 && y === 1) return 1 + lH * DC_RHO;
+  if (x === 1 && y === 1) return 1 - DC_RHO;
+  return 1;
+}
 
 // Poisson probability P(X = k)
 function poissonProb(lambda: number, k: number): number {
@@ -556,24 +677,66 @@ export function calculateTeamStats(teamId: string, teamName: string, recentMatch
     if (m.result !== 'L') unbeatenStreak++; else break;
   }
 
-  // Estimated corners based on attacking style
-  // IMPORTANT: this is per-team corner production, not the full match total.
-  // The previous version used the league match average directly for each team,
-  // which inflated projections and pushed many games into unrealistic 16-20+ totals.
+  // ── Corners: usa dados reais quando disponíveis, estima quando não ────────
+  // Dados reais vêm do enriquecimento ESPN summary (fetchESPNEventStats)
   const cornersBase = lp.avgCorners;
   const teamCornerBase = cornersBase / 2;
+
+  const matchesWithRealCorners = parsed.filter(m => (m.corners ?? 0) > 0);
+  const realCornersBlend = Math.min(matchesWithRealCorners.length / 6, 1); // peso total com 6+ jogos
+
+  // Corners reais separados por casa/fora
+  const homeMWithCorners = matchesWithRealCorners.filter(m => m.isHome);
+  const awayMWithCorners = matchesWithRealCorners.filter(m => !m.isHome);
+
+  const realCornersForHome = homeMWithCorners.length > 0
+    ? homeMWithCorners.reduce((s, m) => s + (m.corners ?? 0), 0) / homeMWithCorners.length
+    : 0;
+  const realCornersForAway = awayMWithCorners.length > 0
+    ? awayMWithCorners.reduce((s, m) => s + (m.corners ?? 0), 0) / awayMWithCorners.length
+    : 0;
+  const realCornersForAvg = matchesWithRealCorners.length > 0
+    ? matchesWithRealCorners.reduce((s, m) => s + (m.corners ?? 0), 0) / matchesWithRealCorners.length
+    : 0;
+
+  // Estimativa baseada em estilo de ataque (fallback quando não há dados reais)
   const goalAttackRatio = clamp(avgGS / Math.max(lp.avgGoals / 2, 0.8), 0.65, 1.35);
   const goalDefenseRatio = clamp(avgGC / Math.max(lp.avgGoals / 2, 0.8), 0.7, 1.3);
-  const cornersFor = clamp(teamCornerBase * (0.74 + goalAttackRatio * 0.26), teamCornerBase * 0.68, teamCornerBase * 1.34);
-  const cornersAgainst = clamp(teamCornerBase * (0.76 + goalDefenseRatio * 0.24), teamCornerBase * 0.7, teamCornerBase * 1.3);
+  const estimatedCornersFor = clamp(teamCornerBase * (0.74 + goalAttackRatio * 0.26), teamCornerBase * 0.68, teamCornerBase * 1.34);
+  const estimatedCornersAgainst = clamp(teamCornerBase * (0.76 + goalDefenseRatio * 0.24), teamCornerBase * 0.7, teamCornerBase * 1.3);
 
-  // Cards estimation: more cards for teams that lose often + aggression factor
+  // Blend: real * peso + estimado * (1 - peso)
+  const cornersFor = realCornersBlend > 0
+    ? clamp(realCornersForAvg * realCornersBlend + estimatedCornersFor * (1 - realCornersBlend), teamCornerBase * 0.5, teamCornerBase * 1.5)
+    : estimatedCornersFor;
+  const cornersAgainst = estimatedCornersAgainst; // cornersAgainst não temos dado direto (são os corners DO adversário)
+
+  // ── Cartões: usa dados reais quando disponíveis ───────────────────────────
+  const matchesWithRealCards = parsed.filter(m => (m.yellowCards ?? 0) > 0 || (m.redCards ?? 0) > 0);
+  const realCardsBlend = Math.min(matchesWithRealCards.length / 6, 1);
+
+  const realAvgYellow = matchesWithRealCards.length > 0
+    ? matchesWithRealCards.reduce((s, m) => s + (m.yellowCards ?? 0), 0) / matchesWithRealCards.length
+    : 0;
+  const realAvgRed = matchesWithRealCards.length > 0
+    ? matchesWithRealCards.reduce((s, m) => s + (m.redCards ?? 0), 0) / matchesWithRealCards.length
+    : 0;
+
+  // Estimativa de cartões por resultado + agressividade da liga (fallback)
   const lossRate = losses / n;
   const aggressionBase = lp.avgCards / 2;
-  const avgYellow = (aggressionBase + lossRate * 1.2) * lp.aggressionFactor;
-  const avgRed = avgYellow * 0.06;
-  const avgYellowHome = avgYellow * 0.85; // Fewer cards at home
-  const avgYellowAway = avgYellow * 1.15; // More cards away
+  const estimatedYellow = (aggressionBase + lossRate * 1.2) * lp.aggressionFactor;
+  const estimatedRed = estimatedYellow * 0.06;
+
+  const avgYellow = realCardsBlend > 0
+    ? realAvgYellow * realCardsBlend + estimatedYellow * (1 - realCardsBlend)
+    : estimatedYellow;
+  const avgRed = realCardsBlend > 0
+    ? realAvgRed * realCardsBlend + estimatedRed * (1 - realCardsBlend)
+    : estimatedRed;
+
+  const avgYellowHome = avgYellow * 0.85; // Menos cartões em casa
+  const avgYellowAway = avgYellow * 1.15; // Mais cartões fora
 
   // Attack/Defense strength (relative to league average)
   const attackStrength = avgGS / leagueAvgGoals;
@@ -583,8 +746,11 @@ export function calculateTeamStats(teamId: string, teamName: string, recentMatch
   const goalsFirstHalfRate = 0.42 + (avgGS > leagueAvgGoals ? 0.03 : -0.03);
   const goalsSecondHalfRate = 0.58 + (avgGS > leagueAvgGoals ? 0.03 : -0.03);
 
-  // Data quality score
-  const dataQuality = Math.min(10, n * 1.5);
+  // Data quality: base pelo número de jogos + bônus por dados reais de escanteios/cartões
+  // Máximo 10, onde: 6+ jogos = base 9, + até 1 ponto pelo share de dados reais de corners
+  const baseQuality = Math.min(9, n * 1.5);
+  const realDataBonus = Math.min(1, (realCornersBlend * 0.6 + realCardsBlend * 0.4));
+  const dataQuality = Math.min(10, baseQuality + realDataBonus);
 
   return {
     idTeam: teamId,
@@ -598,6 +764,13 @@ export function calculateTeamStats(teamId: string, teamName: string, recentMatch
     avgGoalsConcededAway: avgGCAway * blend + leagueAvgGoals * 1.1 * (1 - blend),
     avgCornersFor: cornersFor,
     avgCornersAgainst: cornersAgainst,
+    avgCornersForHome: realCornersForHome > 0
+      ? clamp(realCornersForHome * realCornersBlend + estimatedCornersFor * 1.08 * (1 - realCornersBlend), teamCornerBase * 0.5, teamCornerBase * 1.6)
+      : cornersFor * 1.06,
+    avgCornersForAway: realCornersForAway > 0
+      ? clamp(realCornersForAway * realCornersBlend + estimatedCornersFor * 0.94 * (1 - realCornersBlend), teamCornerBase * 0.4, teamCornerBase * 1.5)
+      : cornersFor * 0.94,
+    cornersDataQuality: realCornersBlend,
     avgYellowCards: avgYellow,
     avgRedCards: avgRed,
     avgYellowCardsHome: avgYellowHome,
@@ -642,6 +815,9 @@ function getDefaultStats(teamId: string, teamName: string, lp: ReturnType<typeof
     avgGoalsScoredHome: leagueAvgGoals * 1.1, avgGoalsScoredAway: leagueAvgGoals * 0.9,
     avgGoalsConcededHome: leagueAvgGoals * 0.9, avgGoalsConcededAway: leagueAvgGoals * 1.1,
     avgCornersFor: lp.avgCorners / 2, avgCornersAgainst: lp.avgCorners / 2,
+    avgCornersForHome: lp.avgCorners / 2 * 1.06,
+    avgCornersForAway: lp.avgCorners / 2 * 0.94,
+    cornersDataQuality: 0,
     avgYellowCards: lp.avgCards / 2, avgRedCards: 0.08,
     avgYellowCardsHome: lp.avgCards * 0.42, avgYellowCardsAway: lp.avgCards * 0.58,
     avgTotalCardsPerGame: lp.avgCards / 2,
@@ -740,8 +916,8 @@ export function calculatePredictions(
   const lp = getLeagueProfile(leagueId);
   const leagueAvgGoals = lp.avgGoals / 2;
 
-  // ---- EXPECTED GOALS (Dixon-Coles model) ----
-  const homeAdv = isHomeGame ? 1.12 : 1.0;
+  // ---- EXPECTED GOALS (Dixon-Coles model with per-league home advantage) ----
+  const homeAdv = isHomeGame ? lp.homeAdv : 1.0;
 
   // Use home/away specific stats when available
   const homeAttack = (isHomeGame ? homeStats.avgGoalsScoredHome : homeStats.avgGoalsScoredAway) / leagueAvgGoals;
@@ -753,11 +929,11 @@ export function calculatePredictions(
   const xGAway = Math.max(0.25, awayAttack * homeDefense * leagueAvgGoals);
   const xGTotal = xGHome + xGAway;
 
-  // ---- RESULT PROBABILITIES (Poisson bivariate) ----
+  // ---- RESULT PROBABILITIES (Dixon-Coles bivariate Poisson + tau correction) ----
   let homeWin = 0, draw = 0, awayWin = 0;
   for (let i = 0; i <= 9; i++) {
     for (let j = 0; j <= 9; j++) {
-      const p = poissonProb(xGHome, i) * poissonProb(xGAway, j);
+      const p = poissonProb(xGHome, i) * poissonProb(xGAway, j) * dixonColesTau(i, j, xGHome, xGAway);
       if (i > j) homeWin += p;
       else if (i === j) draw += p;
       else awayWin += p;
@@ -774,7 +950,7 @@ export function calculatePredictions(
   let homeWin2 = 0, awayWin1 = 0;
   for (let i = 0; i <= 9; i++) {
     for (let j = 0; j <= 9; j++) {
-      const p = poissonProb(xGHome, i) * poissonProb(xGAway, j);
+      const p = poissonProb(xGHome, i) * poissonProb(xGAway, j) * dixonColesTau(i, j, xGHome, xGAway);
       if (i - j >= 2) homeWin2 += p;
       if (j >= i) awayWin1 += p;
     }
@@ -785,7 +961,7 @@ export function calculatePredictions(
   let homeWin3 = 0, awayWin15 = 0;
   for (let i = 0; i <= 9; i++) {
     for (let j = 0; j <= 9; j++) {
-      const p = poissonProb(xGHome, i) * poissonProb(xGAway, j);
+      const p = poissonProb(xGHome, i) * poissonProb(xGAway, j) * dixonColesTau(i, j, xGHome, xGAway);
       if (i - j >= 2) homeWin3 += p;
       if (j - i >= 0) awayWin15 += p;
     }
@@ -827,11 +1003,24 @@ export function calculatePredictions(
   const secondHalfGoalProb = pct(poissonOver(xGTotal * 0.58, 0));
 
   // ---- CORNERS (Negative Binomial for overdispersion) ----
-  // Corners should stay close to realistic league ranges. We blend team-for,
-  // opponent-against and a modest home edge, then cap the total to avoid the
-  // previous inflation that was sending many games to 16-20 projected corners.
+  // Quando temos dados reais de escanteios por casa/fora (cornersDataQuality > 0),
+  // usamos diretamente em vez de forçar via força de ataque.
+  // Blend proporcional à qualidade dos dados: mais real = menos estimado.
   const cornersBase = lp.avgCorners;
   const teamCornerBase = cornersBase / 2;
+
+  const homeRealQuality = homeStats.cornersDataQuality ?? 0;
+  const awayRealQuality = awayStats.cornersDataQuality ?? 0;
+
+  // avgCornersForHome/Away: corners produzidos pelo time quando joga em casa/fora
+  const homeCornerForReal = isHomeGame
+    ? (homeStats.avgCornersForHome ?? homeStats.avgCornersFor)
+    : (homeStats.avgCornersForAway ?? homeStats.avgCornersFor);
+  const awayCornerForReal = isHomeGame
+    ? (awayStats.avgCornersForAway ?? awayStats.avgCornersFor)
+    : (awayStats.avgCornersForHome ?? awayStats.avgCornersFor);
+
+  // Estimativa via força de ataque (fallback)
   const homeCornerForStrength = clamp(homeStats.avgCornersFor / Math.max(teamCornerBase, 0.1), 0.72, 1.28);
   const awayCornerForStrength = clamp(awayStats.avgCornersFor / Math.max(teamCornerBase, 0.1), 0.72, 1.28);
   const homeCornerAgainstStrength = clamp(homeStats.avgCornersAgainst / Math.max(teamCornerBase, 0.1), 0.74, 1.26);
@@ -839,8 +1028,16 @@ export function calculatePredictions(
   const homeCornerContext = isHomeGame ? 1.05 : 0.97;
   const awayCornerContext = isHomeGame ? 0.97 : 1.05;
 
-  let xCHomeRaw = teamCornerBase * Math.pow(homeCornerForStrength, 0.62) * Math.pow(awayCornerAgainstStrength, 0.38) * homeCornerContext;
-  let xCAwayRaw = teamCornerBase * Math.pow(awayCornerForStrength, 0.62) * Math.pow(homeCornerAgainstStrength, 0.38) * awayCornerContext;
+  const xCHomeEstimated = teamCornerBase * Math.pow(homeCornerForStrength, 0.62) * Math.pow(awayCornerAgainstStrength, 0.38) * homeCornerContext;
+  const xCAwayEstimated = teamCornerBase * Math.pow(awayCornerForStrength, 0.62) * Math.pow(homeCornerAgainstStrength, 0.38) * awayCornerContext;
+
+  // Blend: real ganha peso quando cornersDataQuality é alto
+  let xCHomeRaw = homeRealQuality > 0
+    ? homeCornerForReal * homeRealQuality + xCHomeEstimated * (1 - homeRealQuality)
+    : xCHomeEstimated;
+  let xCAwayRaw = awayRealQuality > 0
+    ? awayCornerForReal * awayRealQuality + xCAwayEstimated * (1 - awayRealQuality)
+    : xCAwayEstimated;
 
   xCHomeRaw = clamp(xCHomeRaw, 2.7, cornersBase * 0.72);
   xCAwayRaw = clamp(xCAwayRaw, 2.3, cornersBase * 0.68);
@@ -1058,21 +1255,33 @@ export function calculateValueBets(
 ): ValueBet[] {
   const valueBets: ValueBet[] = [];
 
+  // Kelly Criterion: f* = (bp - q) / b  where b=decimal_odds-1, p=our_prob, q=1-p
+  // Half-Kelly for safety (reduces variance without much loss of EV)
+  function kellyFraction(prob: number, decimalOdds: number): number {
+    const b = decimalOdds - 1;
+    const p = prob / 100;
+    const q = 1 - p;
+    const k = (b * p - q) / b;
+    return Math.max(0, Math.round(k * 50 * 10) / 10); // Half-Kelly as % of bankroll
+  }
+
   const pushValueBet = (market: string, ourProb: number, marketOddsDecimal: number | null | undefined, impliedProbPct: number, sourceLabel: string) => {
     if (!marketOddsDecimal || ourProb <= 0 || ourProb >= 100) return;
 
     const ourOdds = 100 / ourProb;
-    const evPct = ((ourProb / 100) * marketOddsDecimal - 1) * 100;
+    const evPct   = ((ourProb / 100) * marketOddsDecimal - 1) * 100;
+    const kelly   = kellyFraction(ourProb, marketOddsDecimal);
 
     if (evPct >= 2.5) {
       valueBets.push({
         market,
-        ourProb: Math.round(ourProb * 10) / 10,
+        ourProb:     Math.round(ourProb * 10) / 10,
         impliedProb: Math.round(impliedProbPct * 10) / 10,
-        marketOdds: Math.round(marketOddsDecimal * 100) / 100,
-        ourOdds: Math.round(ourOdds * 100) / 100,
-        edge: Math.round(evPct * 10) / 10,
-        confidence: evPct >= 8 ? 'high' : evPct >= 4 ? 'medium' : 'low',
+        marketOdds:  Math.round(marketOddsDecimal * 100) / 100,
+        ourOdds:     Math.round(ourOdds * 100) / 100,
+        edge:        Math.round(evPct * 10) / 10,
+        kellyPct:    kelly,
+        confidence:  evPct >= 8 ? 'high' : evPct >= 4 ? 'medium' : 'low',
         sourceLabel,
       });
     }
@@ -1148,9 +1357,16 @@ export function buildAnalysisSummary(
   valueBets: ValueBet[],
   marketOdds: AnalysisMarketOdds | null
 ): AnalysisSummary {
-  const avgDataQuality = ((homeStats.dataQuality + awayStats.dataQuality) / 20) * 100;
+  // dataQuality base: 0–10 por time (escala de 0–20 total), mapeado para 0–80
+  const avgDataQuality = ((homeStats.dataQuality + awayStats.dataQuality) / 20) * 80;
   const h2hScore = clamp(headToHead.totalMatches * 8, 0, 20);
-  const dataQualityScore = Math.round(clamp(avgDataQuality + h2hScore, 0, 100));
+
+  // Bônus por dados reais de escanteios (até +10 pontos)
+  const homeCornersQuality = homeStats.cornersDataQuality ?? 0;
+  const awayCornersQuality = awayStats.cornersDataQuality ?? 0;
+  const cornersDataBonus = Math.round(((homeCornersQuality + awayCornersQuality) / 2) * 10);
+
+  const dataQualityScore = Math.round(clamp(avgDataQuality + h2hScore + cornersDataBonus, 0, 100));
 
   let marketAlignmentScore = 52;
   if (marketOdds?.homeWinOdds && marketOdds?.drawOdds && marketOdds?.awayWinOdds) {
@@ -1189,6 +1405,8 @@ export function buildAnalysisSummary(
   if (predictions.expectedTotalGoals >= 3.25) strengths.push(`Projeção ofensiva alta (${predictions.expectedTotalGoals.toFixed(2)} xG total)`);
   else if (predictions.expectedTotalGoals >= 2.35) strengths.push(`Faixa-base do jogo aponta algo próximo de 2 a 3 gols (${predictions.expectedTotalGoals.toFixed(2)} xG)`);
   else strengths.push(`Volume de gols projetado é contido (${predictions.expectedTotalGoals.toFixed(2)} xG total)`);
+  if (cornersDataBonus >= 7) strengths.push('Escanteios calculados com dados históricos reais (alta precisão)');
+  else if (cornersDataBonus >= 4) strengths.push('Escanteios com blend de dados reais e estimativa por contexto');
   if (predictions.expectedCards >= 4.8) strengths.push(`Tendência de intensidade alta em cartões (${predictions.expectedCards.toFixed(1)})`);
   if (Math.abs(homeStats.formMomentum - awayStats.formMomentum) >= 0.35) strengths.push('Diferença de momento recente relevante entre os times');
   if (headToHead.totalMatches >= 3) strengths.push(`H2H aproveitável com ${headToHead.totalMatches} confronto(s) recente(s)`);
@@ -1196,6 +1414,7 @@ export function buildAnalysisSummary(
 
   if (!marketOdds) warnings.push('Sem odds completas de mercado para validar value real nesta partida');
   if (dataQualityScore < 60) warnings.push('Base histórica curta ou incompleta para um jogo desta liga');
+  if (cornersDataBonus < 3) warnings.push('Escanteios estimados por proxy — dados reais de escanteios indisponíveis');
   if (marketAlignmentScore < 45) warnings.push('Modelo e mercado estão bem desalinhados — cenário de maior variância');
   if (predictions.drawProb >= 30) warnings.push('Chance de empate relativamente alta reduz previsibilidade do 1X2');
   if (headToHead.totalMatches === 0) warnings.push('Sem confrontos diretos recentes confirmados entre os times');

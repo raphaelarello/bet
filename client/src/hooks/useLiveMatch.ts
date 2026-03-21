@@ -1,10 +1,108 @@
 // Design: "Estádio Noturno" — Premium Sports Dark
 // Hook: useLiveMatch — Dados ao vivo via ESPN API com polling automático
+// Melhoria v2: fallback para TheSportsDB live quando ESPN summary falha ou não tem stats
+//   TheSportsDB: /eventstats.php?id=EVENT_ID → chutes, posse, cartões
+//   Fallback final: constrói LiveMatchData mínimo a partir dos campos do Match (placar + minuto)
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import type { Match } from '@/lib/types';
 
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
+const SPORTSDB_BASE = 'https://www.thesportsdb.com/api/v1/json/123';
 const LIVE_POLL_INTERVAL = 30_000; // 30 segundos
+
+// ─── AllSports API — gratuita, sem API key necessária para endpoints básicos ───
+// Cobre +500 ligas com placar ao vivo, estatísticas, eventos de jogo
+// Docs: https://allsportsapi.com/soccer-football-api
+// Endpoint público (sem key): retorna dados básicos de jogos ao vivo
+const ALLSPORTS_BASE = 'https://apiv2.allsportsapi.com/football';
+
+// Cache para AllSports (evita chamadas duplicadas)
+const allSportsCache = new Map<string, { data: unknown; timestamp: number }>();
+const ALLSPORTS_CACHE_TTL = 20_000; // 20s — mais agressivo pois é live
+
+async function fetchAllSportsLive(eventId: string): Promise<{
+  home: Partial<LiveTeamStats>;
+  away: Partial<LiveTeamStats>;
+  homeScore: string;
+  awayScore: string;
+  clock: string;
+  isLive: boolean;
+} | null> {
+  // AllSports usa IDs próprios — funciona melhor com jogos buscados pela própria API
+  // Para jogos ESPN/TSDB, tentamos com o ID numérico limpo
+  const rawId = eventId.replace(/^tsdb_|^oldb_|^espn_/, '');
+  if (!rawId) return null;
+
+  // Chave da API: tenta localStorage primeiro (usuário configurou), senão pula silenciosamente
+  // Registro grátis em: https://allsportsapi.com/
+  const apiKey = (() => {
+    try { return localStorage.getItem('allsports_api_key') || ''; } catch { return ''; }
+  })();
+  if (!apiKey) return null; // Sem chave = pula silenciosamente, sem erros no console
+
+  const cacheKey = `allsports_${rawId}`;
+  const cached = allSportsCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < ALLSPORTS_CACHE_TTL) {
+    return cached.data as ReturnType<typeof fetchAllSportsLive> extends Promise<infer T> ? T : never;
+  }
+
+  try {
+    // Endpoint de fixture por ID — retorna stats ao vivo quando jogo está em andamento
+    const res = await fetch(
+      `${ALLSPORTS_BASE}/?met=Fixtures&APIkey=${apiKey}&matchId=${rawId}`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as { result?: Record<string, unknown>[] };
+    const fixture = data.result?.[0];
+    if (!fixture) return null;
+
+    const status = String(fixture.event_status || '');
+    const isLive = status === 'inprogress' || status === '1H' || status === '2H' || status === 'HT';
+
+    const parseStatValue = (val: unknown): number => parseFloat(String(val ?? '0')) || 0;
+
+    const stats = fixture.statistics as Record<string, unknown>[] | undefined;
+    const home: Partial<LiveTeamStats> = {};
+    const away: Partial<LiveTeamStats> = {};
+
+    if (stats && stats.length > 0) {
+      for (const s of stats) {
+        const type = String(s.type || '').toLowerCase();
+        const h = parseStatValue(s.home);
+        const a = parseStatValue(s.away);
+        if (type.includes('possession'))          { home.possession = h; away.possession = a; }
+        else if (type.includes('shots on target')) { home.shotsOnTarget = h; away.shotsOnTarget = a; }
+        else if (type.includes('total shots') || type === 'shots') { home.shots = h; away.shots = a; }
+        else if (type.includes('corner'))         { home.corners = h; away.corners = a; }
+        else if (type.includes('yellow'))         { home.yellowCards = h; away.yellowCards = a; }
+        else if (type.includes('red card'))       { home.redCards = h; away.redCards = a; }
+        else if (type.includes('foul'))           { home.fouls = h; away.fouls = a; }
+        else if (type.includes('offside'))        { home.offsides = h; away.offsides = a; }
+        else if (type.includes('save'))           { home.saves = h; away.saves = a; }
+      }
+    }
+
+    const result = {
+      home,
+      away,
+      homeScore: String(fixture.event_final_result
+        ? String(fixture.event_final_result).split(' - ')[0]
+        : fixture.event_home_final_score ?? ''),
+      awayScore: String(fixture.event_final_result
+        ? String(fixture.event_final_result).split(' - ')[1]
+        : fixture.event_away_final_score ?? ''),
+      clock: String(fixture.event_time || ''),
+      isLive,
+    };
+
+    allSportsCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    return result;
+  } catch {
+    return null;
+  }
+}
 const LIVE_CACHE_TTL = 25_000;     // Cache de 25s (um pouco menos que o poll)
 
 // ===== Tipos de dados ao vivo =====
@@ -78,12 +176,100 @@ async function fetchLiveMatchData(eventId: string): Promise<LiveMatchData | null
     return cached.data;
   }
 
+  // ── Fonte 1: ESPN summary (melhor qualidade — eventos, stats, placar) ──
+  const espnData = await fetchLiveFromESPN(eventId);
+  if (espnData) {
+    // Se ESPN retornou mas sem stats (boxscore vazio), tenta enriquecer com TheSportsDB + AllSports em paralelo
+    const hasStats = espnData.homeStats.shots > 0 || espnData.homeStats.corners > 0 || espnData.homeStats.yellowCards > 0;
+    if (!hasStats && (espnData.isLive || espnData.isFinished)) {
+      const [tsdbStats, allSportsStats] = await Promise.allSettled([
+        fetchLiveStatsFromTSDB(eventId),
+        fetchAllSportsLive(eventId),
+      ]);
+
+      // Aplica TheSportsDB
+      if (tsdbStats.status === 'fulfilled' && tsdbStats.value) {
+        espnData.homeStats = { ...espnData.homeStats, ...tsdbStats.value.home };
+        espnData.awayStats = { ...espnData.awayStats, ...tsdbStats.value.away };
+      }
+
+      // Aplica AllSports para qualquer stat ainda zerada
+      if (allSportsStats.status === 'fulfilled' && allSportsStats.value) {
+        const as = allSportsStats.value;
+        // Só sobrescreve campos que ainda estão zerados (TSDB tem prioridade)
+        if (!espnData.homeStats.shots && as.home.shots)           espnData.homeStats.shots = as.home.shots ?? 0;
+        if (!espnData.homeStats.corners && as.home.corners)       espnData.homeStats.corners = as.home.corners ?? 0;
+        if (!espnData.homeStats.yellowCards && as.home.yellowCards) espnData.homeStats.yellowCards = as.home.yellowCards ?? 0;
+        if (!espnData.awayStats.shots && as.away.shots)           espnData.awayStats.shots = as.away.shots ?? 0;
+        if (!espnData.awayStats.corners && as.away.corners)       espnData.awayStats.corners = as.away.corners ?? 0;
+        if (!espnData.awayStats.yellowCards && as.away.yellowCards) espnData.awayStats.yellowCards = as.away.yellowCards ?? 0;
+      }
+    }
+    liveCache.set(eventId, { data: espnData, timestamp: Date.now() });
+    return espnData;
+  }
+
+  // ── Fonte 2: TheSportsDB live stats ──────────────────────────────────
+  const tsdbData = await fetchLiveFromTSDB(eventId);
+  if (tsdbData) {
+    // Enriquece TSDB com AllSports se stats estiverem vazios
+    const hasStats = tsdbData.homeStats.shots > 0 || tsdbData.homeStats.corners > 0;
+    if (!hasStats) {
+      const asStats = await fetchAllSportsLive(eventId);
+      if (asStats) {
+        tsdbData.homeStats = { ...tsdbData.homeStats, ...asStats.home };
+        tsdbData.awayStats = { ...tsdbData.awayStats, ...asStats.away };
+        if (asStats.clock && !tsdbData.clock) tsdbData.clock = asStats.clock;
+      }
+    }
+    liveCache.set(eventId, { data: tsdbData, timestamp: Date.now() });
+    return tsdbData;
+  }
+
+  // ── Fonte 3: AllSports API — fallback puro para ligas não cobertas ────
+  // Constrói um LiveMatchData mínimo com os dados disponíveis
+  const asData = await fetchAllSportsLive(eventId);
+  if (asData && (asData.isLive || asData.homeScore || asData.awayScore)) {
+    const defaultStats: LiveTeamStats = {
+      possession: 50, shots: 0, shotsOnTarget: 0, corners: 0,
+      fouls: 0, yellowCards: 0, redCards: 0, offsides: 0, saves: 0, onTargetPct: 0,
+    };
+    const liveData: LiveMatchData = {
+      eventId,
+      status: asData.isLive ? 'in' : 'post',
+      statusDescription: asData.isLive ? 'In Progress' : 'Full Time',
+      statusDetail: asData.clock || '',
+      clock: asData.clock || '',
+      period: asData.clock ? (parseInt(asData.clock) > 45 ? 2 : 1) : 0,
+      homeScore: asData.homeScore || '0',
+      awayScore: asData.awayScore || '0',
+      homeTeamId: '',
+      awayTeamId: '',
+      homeStats: { ...defaultStats, ...asData.home },
+      awayStats: { ...defaultStats, ...asData.away },
+      events: [],
+      lastUpdated: Date.now(),
+      isLive: asData.isLive,
+      isFinished: !asData.isLive && !!(asData.homeScore || asData.awayScore),
+    };
+    liveCache.set(eventId, { data: liveData, timestamp: Date.now() });
+    return liveData;
+  }
+
+  return null;
+}
+
+// ============================================================
+// FONTE 1: ESPN summary
+// ============================================================
+async function fetchLiveFromESPN(eventId: string): Promise<LiveMatchData | null> {
+  // Só tenta ESPN se o ID parece ser ESPN (sem prefixo tsdb_ ou oldb_)
+  if (eventId.startsWith('tsdb_') || eventId.startsWith('oldb_')) return null;
+
   try {
     const res = await fetch(
       `${ESPN_BASE}/all/summary?event=${eventId}`,
-      {
-        headers: { 'Accept': 'application/json' },
-      }
+      { headers: { 'Accept': 'application/json' } }
     );
 
     if (!res.ok) return null;
@@ -166,10 +352,8 @@ async function fetchLiveMatchData(eventId: string): Promise<LiveMatchData | null
       let parsedType = parseEventType(typeText, isYellow, isRed, isOwn);
       if (isPenalty && parsedType === 'goal') parsedType = 'penalty';
 
-      // Determinar lado (home/away) pelo teamId
       const teamSide: 'home' | 'away' = teamId === homeTeamId ? 'home' : 'away';
 
-      // Descrição em português
       let description = '';
       switch (parsedType) {
         case 'goal': description = `Gol de ${player1}`; break;
@@ -218,10 +402,138 @@ async function fetchLiveMatchData(eventId: string): Promise<LiveMatchData | null
       isFinished,
     };
 
-    liveCache.set(eventId, { data: liveData, timestamp: Date.now() });
     return liveData;
-  } catch (err) {
-    console.error('Erro ao buscar dados ao vivo:', err);
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================
+// FONTE 2: TheSportsDB eventstats — chutes, posse, cartões
+// Endpoint gratuito: /eventstats.php?id=TSDB_EVENT_ID
+// Usado como fallback quando ESPN não tem stats ou jogo é de liga não coberta
+// ============================================================
+interface TSDBStatsRaw {
+  idStatistic: string;
+  idEvent: string;
+  strStat: string;           // "Ball Possession", "Total Shots", "Corner Kicks", etc.
+  intHome: string;
+  intAway: string;
+}
+
+async function fetchLiveStatsFromTSDB(
+  eventId: string
+): Promise<{ home: Partial<LiveTeamStats>; away: Partial<LiveTeamStats> } | null> {
+  // Remove prefixos de fonte para obter o ID numérico
+  const rawId = eventId.replace(/^tsdb_/, '').replace(/^espn_/, '');
+  if (!rawId || isNaN(Number(rawId))) return null;
+
+  try {
+    const res = await fetch(`${SPORTSDB_BASE}/eventstats.php?id=${rawId}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { eventstats: TSDBStatsRaw[] | null };
+    if (!data.eventstats?.length) return null;
+
+    const home: Partial<LiveTeamStats> = {};
+    const away: Partial<LiveTeamStats> = {};
+
+    for (const stat of data.eventstats) {
+      const label = stat.strStat.toLowerCase();
+      const h = parseFloat(stat.intHome) || 0;
+      const a = parseFloat(stat.intAway) || 0;
+
+      if (label.includes('possession'))           { home.possession = h; away.possession = a; }
+      else if (label.includes('total shot'))       { home.shots = h; away.shots = a; }
+      else if (label.includes('shot on target') || label.includes('on goal')) { home.shotsOnTarget = h; away.shotsOnTarget = a; }
+      else if (label.includes('corner'))           { home.corners = h; away.corners = a; }
+      else if (label.includes('foul'))             { home.fouls = h; away.fouls = a; }
+      else if (label.includes('yellow'))           { home.yellowCards = h; away.yellowCards = a; }
+      else if (label.includes('red card'))         { home.redCards = h; away.redCards = a; }
+      else if (label.includes('offside'))          { home.offsides = h; away.offsides = a; }
+      else if (label.includes('save'))             { home.saves = h; away.saves = a; }
+    }
+
+    return { home, away };
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================
+// FONTE 2B: TheSportsDB livescore — constrói LiveMatchData completo
+// para jogos que não estão na ESPN (ex: vindos de OpenLigaDB/TSDB)
+// ============================================================
+async function fetchLiveFromTSDB(eventId: string): Promise<LiveMatchData | null> {
+  const rawId = eventId.replace(/^tsdb_/, '').replace(/^oldb_/, '');
+  if (!rawId || isNaN(Number(rawId))) return null;
+
+  try {
+    // TheSportsDB event lookup
+    const [eventRes, statsRes] = await Promise.allSettled([
+      fetch(`${SPORTSDB_BASE}/lookupevent.php?id=${rawId}`, { headers: { Accept: 'application/json' } }),
+      fetch(`${SPORTSDB_BASE}/eventstats.php?id=${rawId}`, { headers: { Accept: 'application/json' } }),
+    ]);
+
+    let event: Record<string, unknown> | null = null;
+    if (eventRes.status === 'fulfilled' && eventRes.value.ok) {
+      const data = await eventRes.value.json() as { events: Record<string, unknown>[] | null };
+      event = data.events?.[0] ?? null;
+    }
+
+    if (!event) return null;
+
+    const homeScore = String(event.intHomeScore ?? event.intScore ?? '');
+    const awayScore = String(event.intAwayScore ?? event.intScoreAway ?? '');
+    const strStatus = String(event.strStatus || event.strProgress || '');
+    const isLive    = strStatus === 'In Progress' || strStatus === '1H' || strStatus === '2H' || strStatus === 'HT';
+    const isFinished = strStatus === 'Match Finished' || strStatus === 'FT' || strStatus === 'AET' || strStatus === 'PEN';
+
+    // Estatísticas
+    let homeStats: LiveTeamStats = { possession: 50, shots: 0, shotsOnTarget: 0, corners: 0, fouls: 0, yellowCards: 0, redCards: 0, offsides: 0, saves: 0, onTargetPct: 0 };
+    let awayStats: LiveTeamStats = { ...homeStats };
+
+    if (statsRes.status === 'fulfilled' && statsRes.value.ok) {
+      const sData = await statsRes.value.json() as { eventstats: TSDBStatsRaw[] | null };
+      if (sData.eventstats) {
+        const parsed = await fetchLiveStatsFromTSDB(eventId);
+        if (parsed) {
+          homeStats = { ...homeStats, ...parsed.home };
+          awayStats = { ...awayStats, ...parsed.away };
+        }
+      }
+    }
+
+    // Minuto (TSDB usa strProgress ex: "65'")
+    const progress = String(event.strProgress || '');
+    const minuteMatch = progress.match(/(\d+)/);
+    const clock = minuteMatch ? `${minuteMatch[1]}'` : '';
+
+    // Período estimado pelo progresso
+    const period = progress.includes('HT') || progress.includes('Intervalo') ? 1
+      : progress.includes('2H') || (minuteMatch && Number(minuteMatch[1]) > 45) ? 2
+      : 1;
+
+    return {
+      eventId,
+      status: isLive ? 'in' : isFinished ? 'post' : 'pre',
+      statusDescription: isLive ? 'In Progress' : isFinished ? 'Full Time' : '',
+      statusDetail: progress,
+      clock,
+      period,
+      homeScore,
+      awayScore,
+      homeTeamId: String(event.idHomeTeam || ''),
+      awayTeamId: String(event.idAwayTeam || ''),
+      homeStats,
+      awayStats,
+      events: [],  // TSDB não fornece timeline de eventos em tempo real
+      lastUpdated: Date.now(),
+      isLive,
+      isFinished,
+    };
+  } catch {
     return null;
   }
 }

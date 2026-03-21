@@ -155,6 +155,25 @@ export function deriveLiveProjection(predictions: Predictions, liveData: LiveMat
   const totalRedCards = (liveData.homeStats.redCards || 0) + (liveData.awayStats.redCards || 0);
   const goalDiff = currentHomeGoals - currentAwayGoals;
 
+  // ── xG ao vivo recalibrado por chutes no alvo ──────────────────────────────
+  // Se temos chutes no alvo reais, recalculamos o xG residual baseado no ritmo
+  // de finalização observado, em vez de apenas escalar o xG pré-jogo.
+  // Taxa de conversão típica: ~12% dos chutes no alvo viram gol (varia por liga).
+  const CONVERSION_RATE = 0.12;
+  const hasOnTargetData = totalShotsOnTarget > 0 && minute > 5;
+
+  // xG observado até agora (baseado em chutes no alvo reais)
+  const xGObservedTotal = hasOnTargetData
+    ? totalShotsOnTarget * CONVERSION_RATE
+    : predictions.expectedTotalGoals * cumulativeShare(minute, 0.42);
+
+  // Ritmo de xG: compara xG observado com o esperado até este momento
+  const xGExpectedSoFar = predictions.expectedTotalGoals * Math.max(cumulativeShare(minute, 0.42), 0.05);
+  const xGPaceRaw = hasOnTargetData && xGExpectedSoFar > 0
+    ? xGObservedTotal / xGExpectedSoFar
+    : 1.0;
+  const xGPace = clampNumber(xGPaceRaw, 0.4, 2.2);
+
   const goalShareNow = cumulativeShare(minute, 0.42);
   const cornerShareNow = cumulativeShare(minute, 0.46);
   const cardShareNow = cumulativeShare(minute, 0.4);
@@ -163,9 +182,17 @@ export function deriveLiveProjection(predictions: Predictions, liveData: LiveMat
   const expectedShotsOnTargetFull = clampNumber(predictions.expectedTotalGoals * 2.7, 4.5, 12);
   const expectedFoulsFull = clampNumber(predictions.expectedCards * 6.5, 16, 34);
 
-  const goalPaceIndex = dampenedRatio(totalShots, expectedShotsFull * Math.max(goalShareNow, 0.12), 0.45, 1.85) * 0.45
-    + dampenedRatio(totalShotsOnTarget, expectedShotsOnTargetFull * Math.max(goalShareNow, 0.12), 0.45, 2.0) * 0.4
-    + dampenedRatio(currentTotalCorners, predictions.expectedCorners * Math.max(cornerShareNow, 0.14), 0.5, 1.8) * 0.15;
+  // goalPaceIndex: quando temos dados reais de chutes no alvo, xGPace recebe peso
+  // maior (substitui o ratio de chutes totais vs esperados, que é menos preciso)
+  const shotsPaceRatio = dampenedRatio(totalShots, expectedShotsFull * Math.max(goalShareNow, 0.12), 0.45, 1.85);
+  const onTargetPaceRatio = dampenedRatio(totalShotsOnTarget, expectedShotsOnTargetFull * Math.max(goalShareNow, 0.12), 0.45, 2.0);
+  const cornersPaceRatio = dampenedRatio(currentTotalCorners, predictions.expectedCorners * Math.max(cornerShareNow, 0.14), 0.5, 1.8);
+
+  const goalPaceIndex = hasOnTargetData
+    // Com dados reais de chutes no alvo: xGPace domina (40%), on-target ratio (30%), shots (15%), corners (15%)
+    ? clampNumber(xGPace * 0.40 + onTargetPaceRatio * 0.30 + shotsPaceRatio * 0.15 + cornersPaceRatio * 0.15, 0.45, 1.95)
+    // Sem dados reais: pesos originais (shots + onTarget + corners)
+    : shotsPaceRatio * 0.45 + onTargetPaceRatio * 0.40 + cornersPaceRatio * 0.15;
 
   const cornerExpectedSoFar = predictions.expectedCorners * Math.max(cornerShareNow, minute <= 20 ? 0.22 : minute <= 35 ? 0.18 : 0.14);
   const cornerPaceCeiling = minute <= 20 ? 1.28 : minute <= 35 ? 1.45 : minute <= 55 ? 1.68 : 1.82;

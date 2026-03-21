@@ -20,7 +20,7 @@ import {
   enrichMatchData,
   applyEnrichmentToXG,
   getFDOApiKey,
-  SUPPORTED_LEAGUES_FDO,
+  getSupportedLeaguesFDO,
 } from '@/lib/footballDataOrg';
 import type { Match, MatchAnalysis, Predictions, AnalysisMarketOdds } from '@/lib/types';
 
@@ -140,7 +140,7 @@ export function useMatchAnalysis() {
       const leagueId = match.idLeague || match.espnLeagueId || '';
       const hasESPNIds = !!(match.espnHomeTeamId && match.espnAwayTeamId);
       const apiKey = getFDOApiKey();
-      const isLeagueSupported = SUPPORTED_LEAGUES_FDO.includes(leagueId);
+      const isLeagueSupported = getSupportedLeaguesFDO().includes(leagueId);
 
       const [homeLastEvents, awayLastEvents, enrichment, fetchedMarketOdds] = await Promise.all([
         hasESPNIds
@@ -201,12 +201,32 @@ export function useMatchAnalysis() {
           avgGoalsScored: enrichedXG.xGHome,
           avgGoalsScoredHome: enrichedXG.xGHome * 1.1,
           avgGoalsScoredAway: enrichedXG.xGHome * 0.9,
+          // Injeta corners reais do FDO quando disponíveis (matchesWithStats > 3)
+          ...(enrichedXG.cornersHome > 0 && {
+            avgCornersFor: enrichedXG.cornersHome,
+            avgCornersForHome: enrichedXG.cornersHome * 1.08,
+            avgCornersForAway: enrichedXG.cornersHome * 0.92,
+          }),
+          // Injeta posse real do FDO
+          ...(enrichedXG.possessionHome > 0 && {
+            avgPossession: enrichedXG.possessionHome,
+          }),
         };
         const enrichedAwayStats = {
           ...awayTeamStats,
           avgGoalsScored: enrichedXG.xGAway,
           avgGoalsScoredHome: enrichedXG.xGAway * 1.1,
           avgGoalsScoredAway: enrichedXG.xGAway * 0.9,
+          // Injeta corners reais do FDO
+          ...(enrichedXG.cornersAway > 0 && {
+            avgCornersFor: enrichedXG.cornersAway,
+            avgCornersForHome: enrichedXG.cornersAway * 1.08,
+            avgCornersForAway: enrichedXG.cornersAway * 0.92,
+          }),
+          // Injeta posse real do FDO
+          ...(enrichedXG.possessionAway > 0 && {
+            avgPossession: enrichedXG.possessionAway,
+          }),
         };
         predictions = calculatePredictions(enrichedHomeStats, enrichedAwayStats, true, effectiveLeagueId);
       }

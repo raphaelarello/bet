@@ -92,6 +92,9 @@ export interface TeamStats {
   // Escanteios
   avgCornersFor: number;
   avgCornersAgainst: number;
+  avgCornersForHome?: number;   // média real de escanteios em casa (quando disponível)
+  avgCornersForAway?: number;   // média real de escanteios fora (quando disponível)
+  cornersDataQuality?: number;  // 0–1: proporção de jogos com dados reais de escanteios
   
   // Cartões
   avgYellowCards: number;
@@ -292,7 +295,8 @@ export interface ValueBet {
   impliedProb: number;
   marketOdds: number;
   ourOdds: number;
-  edge: number; // EV % / vantagem estimada
+  edge: number;       // EV % / vantagem estimada
+  kellyPct?: number;  // Half-Kelly stake % recomendado da banca
   confidence: 'high' | 'medium' | 'low';
   sourceLabel: string;
 }
