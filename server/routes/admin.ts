@@ -9,7 +9,7 @@
  */
 
 import { Router } from 'express';
-import { db } from '../db/schema.js';
+import db from '../db/schema.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 
 const router = Router();

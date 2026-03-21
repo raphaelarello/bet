@@ -18,7 +18,8 @@ import { ResultsPanel } from '@/components/ResultsPanel';
 import { ExecutiveRoundDashboard } from '@/components/ExecutiveRoundDashboard';
 import { RaphaPicksPanel } from '@/components/RaphaPicksPanel';
 import type { Match } from '@/lib/types';
-import { FEATURED_LEAGUES, getToday, getTomorrow, getYesterday } from '@/lib/footballApi';
+import { FEATURED_LEAGUES } from '@/lib/leagues';
+import { getToday, getTomorrow, getYesterday } from '@/lib/footballApi';
 import {
   Calendar,
   ChevronLeft,
@@ -49,6 +50,7 @@ import {
   User,
   Crown,
   LogIn,
+  Flame,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -59,6 +61,7 @@ import { UserMenu } from '@/components/saas/UserMenu';
 import { useFavorites } from '@/contexts/FavoritesContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useGoalNotifications } from '@/hooks/useGoalNotifications';
+import { useLiveMatch, type LiveMatchData } from '@/hooks/useLiveMatch';
 import { useRoundScanner } from '@/hooks/useRoundScanner';
 import type { MatchAnalysis } from '@/lib/types';
 
@@ -122,7 +125,7 @@ function sortMatchesChronologically(list: Match[]) {
 type FiltrarMode = 'all' | 'probability' | 'pitacos' | 'value' | 'high-confidence' | 'national';
 type SidePanel = 'none' | 'history' | 'notifications' | 'comparison' | 'favorites' | 'results';
 type BrowseTab = 'all' | 'favorites' | 'competitions';
-type ViewFilter = 'all' | 'live' | 'upcoming' | 'finished';
+type ViewFilter = 'all' | 'live' | 'hot' | 'upcoming' | 'finished';
 type NationalSubFilter = 'all' | 'worldcup' | 'continental' | 'qualifiers' | 'friendlies';
 
 // IDs de ligas de seleções nacionais
@@ -169,10 +172,11 @@ const BROWSE_TABS: { id: BrowseTab; label: string }[] = [
 ];
 
 const VIEW_FILTER_OPTIONS: { id: ViewFilter; label: string; icon: React.ElementType; accent: string; description: string }[] = [
-  { id: 'all', label: 'Todos', icon: Globe, accent: 'border-slate-600/60 bg-slate-900/70 text-slate-100', description: 'Mostra toda a lista da rodada.' },
-  { id: 'live', label: 'Ao vivo', icon: Zap, accent: 'border-red-500/50 bg-red-500/12 text-red-100', description: 'Exibe apenas partidas em andamento.' },
-  { id: 'upcoming', label: 'Próximos', icon: Calendar, accent: 'border-amber-500/50 bg-amber-500/12 text-amber-100', description: 'Mostra os jogos que começam em breve.' },
-  { id: 'finished', label: 'Encerrados', icon: CheckCircle2, accent: 'border-emerald-500/45 bg-emerald-500/12 text-emerald-100', description: 'Lista somente partidas já finalizadas.' },
+  { id: 'all',      label: 'Todos',       icon: Globe,        accent: 'border-slate-600/60 bg-slate-900/70 text-slate-100',      description: 'Mostra toda a lista da rodada.' },
+  { id: 'live',     label: 'Ao vivo',     icon: Zap,          accent: 'border-red-500/50 bg-red-500/12 text-red-100',            description: 'Exibe apenas partidas em andamento.' },
+  { id: 'hot',      label: 'Ao vivo 🔥',  icon: Flame,        accent: 'border-orange-400/60 bg-orange-500/20 text-orange-100',   description: 'Jogos ao vivo muito movimentados: gols, pressão intensa, escanteios.' },
+  { id: 'upcoming', label: 'Próximos',    icon: Calendar,     accent: 'border-amber-500/50 bg-amber-500/12 text-amber-100',      description: 'Mostra os jogos que começam em breve.' },
+  { id: 'finished', label: 'Encerrados',  icon: CheckCircle2, accent: 'border-emerald-500/45 bg-emerald-500/12 text-emerald-100',description: 'Lista somente partidas já finalizadas.' },
 ];
 
 const FILTER_MODE_OPTIONS: { mode: FiltrarMode; label: string; icon: React.ElementType; description: string; activeClass: string }[] = [
@@ -253,7 +257,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLeague, setSelectedLeague] = useState<string>('all');
   const [showFilters, setShowFilters] = useState(false);
-  const [filterMode, setFiltrarMode] = useState<FilterMode>('all');
+  const [filterMode, setFiltrarMode] = useState<FiltrarMode>('all');
   const [browseTab, setBrowseTab] = useState<BrowseTab>('all');
   const [viewFilter, setViewFilter] = useState<ViewFilter>('all');
   const [sidePanel, setSidePanel] = useState<SidePanel>('none');
@@ -290,6 +294,52 @@ export default function Home() {
 
   // Notificações de gol ao vivo
   useGoalNotifications(matches);
+
+  // Live stats map — escanteios e cartões para MatchCard ao vivo
+  const liveMatchIds = useMemo(
+    () => matches.filter(m => m.strStatus === 'In Progress').map(m => m.idEvent),
+    [matches]
+  );
+  const [liveStatsMap, setLiveStatsMap] = React.useState<Record<string, {
+    homeCorners?: number; awayCorners?: number;
+    homeYellow?: number; awayYellow?: number;
+    homeRed?: number; awayRed?: number;
+  }>>({});
+
+  useEffect(() => {
+    if (liveMatchIds.length === 0) return;
+    let cancelled = false;
+    const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
+    async function fetchStats(id: string) {
+      try {
+        const r = await fetch(`${ESPN_BASE}/all/summary?event=${id}`, { signal: AbortSignal.timeout(6000) });
+        if (!r.ok || cancelled) return;
+        const data = await r.json();
+        const teams = data?.boxscore?.teams ?? [];
+        const parseVal = (teamData: Record<string, unknown>, label: string) => {
+          const stats = Array.isArray(teamData.statistics) ? (teamData.statistics as Record<string, unknown>[]) : [];
+          const found = stats.find(s => String(s.label || s.name || '').toLowerCase().includes(label.toLowerCase()));
+          return found ? Number(found.value ?? found.displayValue ?? 0) : 0;
+        };
+        const [home, away] = [teams[0] ?? {}, teams[1] ?? {}];
+        if (!cancelled) setLiveStatsMap(prev => ({
+          ...prev,
+          [id]: {
+            homeCorners: parseVal(home as Record<string, unknown>, 'corner'),
+            awayCorners: parseVal(away as Record<string, unknown>, 'corner'),
+            homeYellow: parseVal(home as Record<string, unknown>, 'yellow'),
+            awayYellow: parseVal(away as Record<string, unknown>, 'yellow'),
+            homeRed: parseVal(home as Record<string, unknown>, 'red'),
+            awayRed: parseVal(away as Record<string, unknown>, 'red'),
+          }
+        }));
+      } catch { /* ignore */ }
+    }
+    liveMatchIds.forEach(id => fetchStats(id));
+    const interval = setInterval(() => liveMatchIds.forEach(id => fetchStats(id)), 45000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [liveMatchIds.join(',')]);
+
 
   // Favoritos
   const { favoritesCount, favorites } = useFavorites();
@@ -356,15 +406,25 @@ export default function Home() {
     return baseMatches.filter((match) => isUpcomingMatch(match));
   }, [baseMatches, selectedDate]);
 
-  const viewCounts = useMemo(() => ({
-    all: baseMatches.length,
-    live: baseMatches.filter((match) => isLiveMatch(match)).length,
-    upcoming: upcomingMatchesForView.length,
-    finished: baseMatches.filter((match) => isFinishedMatch(match)).length,
-  }), [baseMatches, upcomingMatchesForView]);
-
   // Agrupa por liga
   const { entries: roundEntries, loading: roundLoading, completed: roundCompleted, total: roundTotal } = useRoundScanner(baseMatches);
+
+  const viewCounts = useMemo(() => {
+    // Jogos "hot": ao vivo com pressão alta (livePressureScore >= 65)
+    const hotIds = new Set(
+      roundEntries
+        .filter(e => e.liveState === 'live' && e.livePressureScore >= 65)
+        .map(e => e.match.idEvent)
+    );
+    return {
+      all:      baseMatches.length,
+      live:     baseMatches.filter((match) => isLiveMatch(match)).length,
+      hot:      hotIds.size,
+      upcoming: upcomingMatchesForView.length,
+      finished: baseMatches.filter((match) => isFinishedMatch(match)).length,
+      _hotIds:  hotIds,
+    };
+  }, [baseMatches, upcomingMatchesForView, roundEntries]);
 
   const topMatchIds = useMemo(() => {
     const addTop = (list: typeof roundEntries, scoreFn: (entry: typeof roundEntries[number]) => number, limit = 8) =>
@@ -397,12 +457,13 @@ export default function Home() {
 
   const displayedMatches = useMemo(() => {
     if (viewFilter === 'live') return topScopedMatches.filter((match) => isLiveMatch(match));
+    if (viewFilter === 'hot')  return topScopedMatches.filter((match) => viewCounts._hotIds.has(match.idEvent));
     if (viewFilter === 'upcoming') return selectedDate === getLocalTodayISO()
       ? topScopedMatches.filter((match) => isStartingSoon(match, 6))
       : topScopedMatches.filter((match) => isUpcomingMatch(match));
     if (viewFilter === 'finished') return topScopedMatches.filter((match) => isFinishedMatch(match));
     return topScopedMatches;
-  }, [topScopedMatches, viewFilter, selectedDate]);
+  }, [topScopedMatches, viewFilter, selectedDate, viewCounts._hotIds]);
 
   const matchesByLeague = useMemo(() => {
     const groups: Record<string, Match[]> = {};
@@ -512,66 +573,81 @@ export default function Home() {
 
             <div className="flex-1" />
 
-            {/* Ações rápidas */}
-            <div className="flex items-center gap-1">
+            {/* Ações rápidas — agrupadas */}
+            <div className="flex items-center gap-0.5">
+              {/* Grupo 1: painéis */}
               <button onClick={() => handleSidePanel('favorites')} title="Favoritos"
-                className={cn('relative flex h-9 w-9 items-center justify-center rounded-lg border transition-all',
-                  sidePanel === 'favorites' ? 'border-yellow-500/40 bg-yellow-500/10 text-yellow-300' : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200')}>
-                <Heart className="h-4 w-4" />
+                className={cn('relative flex h-8 w-8 items-center justify-center rounded-lg border transition-all',
+                  sidePanel === 'favorites' ? 'border-yellow-500/40 bg-yellow-500/10 text-yellow-300' : 'border-transparent text-slate-500 hover:border-slate-700/60 hover:text-slate-300')}>
+                <Heart className="h-3.5 w-3.5" />
                 {favoritesCount > 0 && (
-                  <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-yellow-500 text-[9px] font-black text-slate-950">
+                  <span className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-yellow-500 text-[8px] font-black text-slate-950">
                     {favoritesCount > 9 ? '9+' : favoritesCount}
                   </span>
                 )}
               </button>
               <button onClick={() => handleSidePanel('notifications')} title="Alertas"
-                className={cn('flex h-9 w-9 items-center justify-center rounded-lg border transition-all',
-                  sidePanel === 'notifications' ? 'border-blue-500/40 bg-blue-500/10 text-blue-300' : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200')}>
-                <Bell className="h-4 w-4" />
-              </button>
-              <button onClick={handleCompareClick} title="Comparar"
-                className={cn('flex h-9 w-9 items-center justify-center rounded-lg border transition-all',
-                  sidePanel === 'comparison' ? 'border-purple-500/40 bg-purple-500/10 text-purple-300' : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200')}>
-                <ArrowLeftRight className="h-4 w-4" />
+                className={cn('flex h-8 w-8 items-center justify-center rounded-lg border transition-all',
+                  sidePanel === 'notifications' ? 'border-blue-500/40 bg-blue-500/10 text-blue-300' : 'border-transparent text-slate-500 hover:border-slate-700/60 hover:text-slate-300')}>
+                <Bell className="h-3.5 w-3.5" />
               </button>
               <button onClick={() => handleSidePanel('history')} title="Histórico"
-                className={cn('flex h-9 w-9 items-center justify-center rounded-lg border transition-all',
-                  sidePanel === 'history' ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200')}>
-                <History className="h-4 w-4" />
+                className={cn('flex h-8 w-8 items-center justify-center rounded-lg border transition-all',
+                  sidePanel === 'history' ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-transparent text-slate-500 hover:border-slate-700/60 hover:text-slate-300')}>
+                <History className="h-3.5 w-3.5" />
               </button>
               <button onClick={() => handleSidePanel('results')} title="Resultados do dia"
-                className={cn('relative flex h-9 w-9 items-center justify-center rounded-lg border transition-all',
-                  sidePanel === 'results' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200')}>
-                <Target className="h-4 w-4" />
+                className={cn('flex h-8 w-8 items-center justify-center rounded-lg border transition-all',
+                  sidePanel === 'results' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-transparent text-slate-500 hover:border-slate-700/60 hover:text-slate-300')}>
+                <Target className="h-3.5 w-3.5" />
+              </button>
+
+              <div className="h-5 w-px bg-white/[0.07] mx-1" />
+
+              {/* Grupo 2: ferramentas */}
+              <button onClick={handleCompareClick} title="Comparar"
+                className={cn('flex h-8 w-8 items-center justify-center rounded-lg border transition-all',
+                  sidePanel === 'comparison' ? 'border-purple-500/40 bg-purple-500/10 text-purple-300' : 'border-transparent text-slate-500 hover:border-slate-700/60 hover:text-slate-300')}>
+                <ArrowLeftRight className="h-3.5 w-3.5" />
               </button>
               <button onClick={() => setLocation('/executor')} title="Execução manual"
-                className="flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200 transition-all">
-                <Send className="h-4 w-4" />
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-slate-500 hover:border-slate-700/60 hover:text-slate-300 transition-all">
+                <Send className="h-3.5 w-3.5" />
               </button>
               <button onClick={() => setLocation('/automacao')} title="Automação"
-                className="flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200 transition-all">
-                <Sparkles className="h-4 w-4" />
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-slate-500 hover:border-slate-700/60 hover:text-slate-300 transition-all">
+                <Sparkles className="h-3.5 w-3.5" />
               </button>
+
+              <div className="h-5 w-px bg-white/[0.07] mx-1" />
+
+              {/* Grupo 3: conta */}
               {!user && (
                 <button onClick={() => setLocation('/planos')} title="Planos e preços"
-                  className="flex items-center gap-1.5 h-9 px-3 rounded-lg border border-blue-500/30 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 transition-all text-[12px] font-bold">
+                  className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-blue-500/30 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 transition-all text-[11px] font-bold">
                   <Crown className="h-3.5 w-3.5" />
                   Planos
                 </button>
               )}
+              {!user && (
+                <button onClick={() => setLocation('/cadastro')} title="Cadastrar"
+                  className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-white/[0.08] text-slate-300 hover:bg-white/[0.05] transition-all text-[11px] font-bold">
+                  Cadastrar
+                </button>
+              )}
               {user && (
                 <button onClick={() => setLocation('/planos')} title="Planos e preços"
-                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200 transition-all">
-                  <Crown className="h-4 w-4" />
+                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-slate-500 hover:border-slate-700/60 hover:text-slate-300 transition-all">
+                  <Crown className="h-3.5 w-3.5" />
                 </button>
               )}
               {isAdmin && (
                 <button onClick={() => setLocation('/admin')} title="Admin"
-                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200 transition-all">
-                  <BarChart2 className="h-4 w-4" />
+                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-slate-500 hover:border-slate-700/60 hover:text-slate-300 transition-all">
+                  <BarChart2 className="h-3.5 w-3.5" />
                 </button>
               )}
-              <div className="h-6 w-px bg-white/[0.08] mx-1" />
+              <div className="h-5 w-px bg-white/[0.07] mx-1" />
               <UserMenu />
             </div>
           </div>
@@ -579,20 +655,32 @@ export default function Home() {
           {/* Sub-linha: filtros de visualização */}
           <div className="flex items-center gap-1 pb-2 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
             {VIEW_FILTER_OPTIONS.map(({ id, label, icon: Icon }) => {
-              const count = viewCounts[id];
+              const count = viewCounts[id as keyof typeof viewCounts] as number;
+              // Esconder "Ao vivo 🔥" quando não há jogos quentes
+              if (id === 'hot' && count === 0) return null;
               const active = viewFilter === id;
-              const activeColor = id === 'live' ? 'border-red-500/40 bg-red-500/10 text-red-300'
+              const isHot = id === 'hot';
+
+              const activeColor = id === 'live'     ? 'border-red-500/40 bg-red-500/10 text-red-300'
+                : id === 'hot'      ? 'border-orange-400/50 bg-orange-500/20 text-orange-200 shadow-[0_0_16px_-4px_rgba(251,146,60,0.6)]'
                 : id === 'upcoming' ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
                 : id === 'finished' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
                 : 'border-blue-500/40 bg-blue-500/10 text-blue-300';
+
+              const inactiveHot = isHot && !active
+                ? 'border-orange-500/30 text-orange-400 hover:border-orange-400/50 hover:bg-orange-500/10 animate-pulse'
+                : '';
+
               return (
                 <button key={id} onClick={() => setViewFilter(active ? 'all' : id as ViewFilter)}
-                  className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-all border',
-                    active ? activeColor : 'border-transparent text-slate-500 hover:text-slate-300 hover:border-slate-700/60')}>
-                  <Icon className="h-3.5 w-3.5" />
+                  className={cn(
+                    'flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-all border',
+                    active ? activeColor : isHot ? inactiveHot : 'border-transparent text-slate-500 hover:text-slate-300 hover:border-slate-700/60'
+                  )}>
+                  <Icon className={cn('h-3.5 w-3.5', isHot && !active && 'animate-bounce')} />
                   {label}
                   <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-black',
-                    active ? 'bg-white/15' : 'bg-slate-800 text-slate-400')}>
+                    active ? 'bg-white/15' : isHot ? 'bg-orange-500/25 text-orange-300' : 'bg-slate-800 text-slate-400')}>
                     {count}
                   </span>
                 </button>
@@ -616,8 +704,8 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 pt-4 pb-6">
-        {/* Probability Hub — full width above the match list */}
-        {filterMode === 'probability' && (
+        {/* Probability Hub — full width above the match list, some quando jogo selecionado */}
+        {filterMode === 'probability' && !selectedMatch && (
           <div className="mb-4">
             <ProbabilityHubPanel
               entries={roundEntries}
@@ -629,8 +717,11 @@ export default function Home() {
           </div>
         )}
         <div className="flex flex-col lg:flex-row gap-6">
-          {/* Left Panel — Match List */}
-          <div className="w-full lg:w-[380px] flex-shrink-0 space-y-3">
+          {/* Left Panel — Match List: some no mobile quando jogo selecionado */}
+          <div className={cn(
+            "w-full lg:w-[380px] flex-shrink-0 space-y-3",
+            selectedMatch ? "hidden lg:block" : ""
+          )}>
             {/* Painel de controle compacto */}
             <div className="space-y-2">
 
@@ -1057,6 +1148,7 @@ export default function Home() {
                           isSelected={selectedMatch?.idEvent === match.idEvent}
                           onClick={() => handleMatchSelect(match)}
                           filterMode={filterMode}
+                          liveStats={match.strStatus === 'In Progress' ? liveStatsMap[match.idEvent] : undefined}
                         />
                       ))}
                     </div>
@@ -1377,6 +1469,14 @@ export default function Home() {
 
                 {analysis && !analysisLoading && (
                   <div className="space-y-3">
+                    {/* Botão voltar — visível apenas no mobile */}
+                    <button
+                      onClick={() => setSelectedMatch(null)}
+                      className="lg:hidden flex items-center gap-2 text-sm text-slate-400 hover:text-slate-200 transition-colors"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Voltar para a lista
+                    </button>
                     {/* Data source indicator */}
                     {enrichmentSource && (
                       <div className={cn(
@@ -1481,11 +1581,13 @@ function MatchCardWithBadge({
   isSelected,
   onClick,
   filterMode,
+  liveStats,
 }: {
   match: Match;
   isSelected: boolean;
   onClick: () => void;
   filterMode: FiltrarMode;
+  liveStats?: { homeCorners?: number; awayCorners?: number; homeYellow?: number; awayYellow?: number; homeRed?: number; awayRed?: number };
 }) {
   const showProbabilityBadge = filterMode === 'probability';
   const showPitacosBadge = filterMode === 'pitacos';
@@ -1517,6 +1619,7 @@ function MatchCardWithBadge({
       onClick={onClick}
       compact
       filterBadge={badge}
+      liveStats={liveStats}
     />
   );
 }

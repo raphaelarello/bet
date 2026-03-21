@@ -4,8 +4,8 @@
   "outputDirectory": "dist/public",
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/index.js"
+      "source": "/api/:path*",
+      "destination": "https://web-production-b8e63.up.railway.app/api/:path*"
     },
     {
       "source": "/((?!api|_next|favicon|assets|__manus__).*)",

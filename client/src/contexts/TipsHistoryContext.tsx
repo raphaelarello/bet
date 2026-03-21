@@ -5,6 +5,12 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 
 export type TipMode = 'real' | 'simulado';
 
+export interface TipSubResult {
+  market: string;       // ex: "Escanteios", "Vencedor", "Gols"
+  prediction: string;   // ex: "+8.5 escanteios", "Vitória Time A"
+  result: 'hit' | 'miss' | 'pending';
+}
+
 export interface HistoricalTip {
   id: string;
   addedAt: string;
@@ -19,6 +25,7 @@ export interface HistoricalTip {
   result: 'pending' | 'won' | 'lost' | 'void';
   profit: number;
   mode: TipMode;
+  subResults?: TipSubResult[];  // acertos/erros por mercado individual
 }
 
 interface PeriodStats {
@@ -45,6 +52,7 @@ interface TipsHistoryContextValue {
   history: HistoricalTip[];
   addToHistory: (tip: Omit<HistoricalTip, 'id' | 'addedAt'>) => void;
   updateResult: (id: string, result: 'won' | 'lost' | 'void') => void;
+  updateSubResult: (tipId: string, market: string, result: 'hit' | 'miss') => void;
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
   stats: {
@@ -172,6 +180,18 @@ export function TipsHistoryProvider({ children }: { children: React.ReactNode })
     }));
   }, []);
 
+  const updateSubResult = useCallback((tipId: string, market: string, result: 'hit' | 'miss') => {
+    setHistory(prev => prev.map(tip => {
+      if (tip.id !== tipId) return tip;
+      const existing = tip.subResults ?? [];
+      const updated = existing.map(s => s.market === market ? { ...s, result } : s);
+      if (!existing.find(s => s.market === market)) {
+        updated.push({ market, prediction: market, result });
+      }
+      return { ...tip, subResults: updated };
+    }));
+  }, []);
+
   const removeFromHistory = useCallback((id: string) => {
     setHistory(prev => prev.filter(t => t.id !== id));
   }, []);
@@ -270,6 +290,7 @@ export function TipsHistoryProvider({ children }: { children: React.ReactNode })
       history,
       addToHistory,
       updateResult,
+      updateSubResult,
       removeFromHistory,
       clearHistory,
       stats,

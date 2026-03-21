@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Match, Predictions, TeamStats, AnalysisSummary, AnalysisMarketOdds, ValueBet } from '@/lib/types';
+import { FEATURED_LEAGUES } from '@/lib/leagues';
 import {
-  FEATURED_LEAGUES,
   getTeamHistoryESPN,
   getTeamLastEvents,
   calculateTeamStats,
@@ -242,7 +242,7 @@ async function scanSingleMatch(match: Match, previousMarketOdds: AnalysisMarketO
     match.strAwayTeam,
   );
 
-  const predictions = calculatePredictions(homeTeamStats, awayTeamStats, true, effectiveLeagueId);
+  const predictions = calculatePredictions(homeTeamStats, awayTeamStats, true, effectiveLeagueId, headToHead);
   const marketOdds = normalizeMarketOdds(fetchedMarketOdds, match);
   const valueBets = calculateValueBets(predictions, match.strHomeTeam, match.strAwayTeam, marketOdds);
   const summary = buildAnalysisSummary(predictions, homeTeamStats, awayTeamStats, headToHead, valueBets, marketOdds);

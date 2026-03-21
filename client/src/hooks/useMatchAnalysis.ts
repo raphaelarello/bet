@@ -74,10 +74,53 @@ function blendWithMarket(predictions: Predictions, marketOdds: AnalysisMarketOdd
 
   const blended: Predictions = {
     ...predictions,
+    // ── 1X2: blend 68% modelo + 32% mercado ──────────────────────────────
     homeWinProb: predictions.homeWinProb * 0.68 + marketHome * 0.32,
-    drawProb: predictions.drawProb * 0.68 + marketDraw * 0.32,
+    drawProb:    predictions.drawProb    * 0.68 + marketDraw * 0.32,
     awayWinProb: predictions.awayWinProb * 0.68 + marketAway * 0.32,
   };
+
+  // ── Over/Under de gols: calibra com a linha e odds do mercado ────────────
+  // Quando temos totalLine + overOdds + underOdds, recalculamos o xG implícito
+  // do mercado e blendamos com o nosso expectedTotalGoals (25% mercado).
+  if (
+    marketOdds.totalLine != null &&
+    marketOdds.overOdds != null &&
+    marketOdds.underOdds != null &&
+    marketOdds.overOdds > 1 &&
+    marketOdds.underOdds > 1
+  ) {
+    const impliedOver  = 1 / marketOdds.overOdds;
+    const impliedUnder = 1 / marketOdds.underOdds;
+    const vigSum = impliedOver + impliedUnder;
+
+    // Remove o vig para obter a probabilidade de over "justa"
+    const fairOverProb = vigSum > 0 ? (impliedOver / vigSum) * 100 : null;
+
+    if (fairOverProb !== null) {
+      const line = marketOdds.totalLine;
+      // Blend over25Prob com a fair prob do mercado quando a linha é 2.5
+      if (Math.abs(line - 2.5) < 0.1) {
+        blended.over25Prob = predictions.over25Prob * 0.75 + fairOverProb * 0.25;
+        blended.under25Prob = 100 - blended.over25Prob;
+      } else if (Math.abs(line - 1.5) < 0.1) {
+        blended.over15Prob = predictions.over15Prob * 0.75 + fairOverProb * 0.25;
+      } else if (Math.abs(line - 3.5) < 0.1) {
+        blended.over35Prob = predictions.over35Prob * 0.75 + fairOverProb * 0.25;
+        blended.under35Prob = 100 - blended.over35Prob;
+      }
+
+      // xG implícito do mercado: usa a linha como proxy do xG esperado
+      // (a linha de over/under é quase sempre o xG total esperado pela casa)
+      const marketXGTotal = line;
+      const marketXGBlend = 0.20; // 20% do mercado
+      const blendedXGTotal = predictions.expectedTotalGoals * (1 - marketXGBlend) + marketXGTotal * marketXGBlend;
+      const ratio = blendedXGTotal / Math.max(predictions.expectedTotalGoals, 0.01);
+      blended.expectedTotalGoals  = Math.round(blendedXGTotal * 100) / 100;
+      blended.expectedGoalsHome   = Math.round(predictions.expectedGoalsHome * ratio * 100) / 100;
+      blended.expectedGoalsAway   = Math.round(predictions.expectedGoalsAway * ratio * 100) / 100;
+    }
+  }
 
   return normalize1X2(blended);
 }
@@ -183,7 +226,7 @@ export function useMatchAnalysis() {
         match.strAwayTeam,
       );
 
-      const basePredictions = calculatePredictions(homeTeamStats, awayTeamStats, true, effectiveLeagueId);
+      const basePredictions = calculatePredictions(homeTeamStats, awayTeamStats, true, effectiveLeagueId, headToHead);
       const enrichedXG = applyEnrichmentToXG(
         basePredictions.expectedGoalsHome,
         basePredictions.expectedGoalsAway,
@@ -228,7 +271,7 @@ export function useMatchAnalysis() {
             avgPossession: enrichedXG.possessionAway,
           }),
         };
-        predictions = calculatePredictions(enrichedHomeStats, enrichedAwayStats, true, effectiveLeagueId);
+        predictions = calculatePredictions(enrichedHomeStats, enrichedAwayStats, true, effectiveLeagueId, headToHead);
       }
 
       predictions = blendWithMarket(predictions, marketOdds);
@@ -242,7 +285,7 @@ export function useMatchAnalysis() {
       const valueBets = calculateValueBets(predictions, match.strHomeTeam, match.strAwayTeam, marketOdds);
       const summary = buildAnalysisSummary(predictions, homeTeamStats, awayTeamStats, headToHead, valueBets, marketOdds);
 
-      const rawTips = generateTips(predictions, homeTeamStats, awayTeamStats, match.strHomeTeam, match.strAwayTeam);
+      const rawTips = generateTips(predictions, homeTeamStats, awayTeamStats, match.strHomeTeam, match.strAwayTeam, headToHead, marketOdds);
       const tips = applyTipValueFlags(rawTips, valueBets);
 
       const avgDataQuality = (homeTeamStats.dataQuality + awayTeamStats.dataQuality) / 2;

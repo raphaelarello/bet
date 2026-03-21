@@ -168,25 +168,17 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react':    ['react', 'react-dom'],
-          'vendor-motion':   ['framer-motion'],
-          'vendor-charts':   ['recharts'],
-          'vendor-radix':    [
-            '@radix-ui/react-dialog',
-            '@radix-ui/react-dropdown-menu',
-            '@radix-ui/react-select',
-            '@radix-ui/react-tabs',
-            '@radix-ui/react-tooltip',
-            '@radix-ui/react-popover',
-            '@radix-ui/react-accordion',
-          ],
-          'vendor-misc':     ['wouter', 'sonner', 'zod', 'clsx', 'tailwind-merge'],
-        },
+        // Sem manualChunks — evita TDZ cross-chunk em export const de módulos compartilhados
+        // Rollup faz code-splitting automático apenas para lazy() imports
+      },
+      // Desativa tree-shaking agressivo que pode reordenar inicialização de módulos
+      treeshake: {
+        moduleSideEffects: true,
+        propertyReadSideEffects: true,
+        unknownGlobalSideEffects: true,
       },
     },
-    // Aumenta aviso de chunk para 800kb (padrão 500kb) para evitar falsos alarmes
-    chunkSizeWarningLimit: 800,
+    chunkSizeWarningLimit: 1500,
   },
   server: {
     port: 3000,

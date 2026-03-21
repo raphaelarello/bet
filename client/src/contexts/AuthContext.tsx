@@ -19,17 +19,17 @@ export interface AuthUser {
   last_login_at: number | null; created_at: number;
 }
 
-export const PLAN_RANK: Record<string, number> = {
+export const PLAN_RANK: Record<string, number> = Object.freeze({
   free: 0, basic: 1, pro: 2, elite: 3, admin: 99,
-};
+});
 
-export const PLAN_META: Record<string, { name: string; color: string; glow: string; icon: string }> = {
+export const PLAN_META: Record<string, { name: string; color: string; glow: string; icon: string }> = Object.freeze({
   free:  { name: 'Gratuito', color: '#6b7280', glow: 'rgba(107,114,128,.2)',  icon: '🎁' },
   basic: { name: 'Básico',   color: '#3b82f6', glow: 'rgba(59,130,246,.25)',  icon: '⭐' },
   pro:   { name: 'Pro',      color: '#a855f7', glow: 'rgba(168,85,247,.25)',  icon: '⚡' },
   elite: { name: 'Elite',    color: '#f59e0b', glow: 'rgba(245,158,11,.25)',  icon: '👑' },
   admin: { name: 'Admin',    color: '#ef4444', glow: 'rgba(239,68,68,.25)',   icon: '🛡️' },
-};
+});
 
 interface AuthCtx {
   user: AuthUser | null;

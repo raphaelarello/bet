@@ -180,35 +180,30 @@ export function TripleProbabilityBar({
 
   return (
     <div className="w-full">
-      <div className="flex justify-between text-xs text-slate-400 mb-2">
-        <span className="font-medium truncate max-w-[35%]">{homeLabel}</span>
+      <div className="flex justify-between text-xs text-slate-400 mb-2 font-semibold">
+        <span>Casa</span>
         <span>Empate</span>
-        <span className="font-medium truncate max-w-[35%] text-right">{awayLabel}</span>
+        <span>Visitante</span>
       </div>
-      <div className="flex h-8 rounded-lg overflow-hidden gap-0.5">
+      <div className="flex h-10 rounded-xl overflow-hidden gap-0.5">
         <div
-          className="bg-blue-600 flex items-center justify-center text-white text-xs font-bold transition-all duration-100"
+          className="bg-blue-600 flex items-center justify-center text-white text-sm font-black transition-all duration-100"
           style={{ width: `${displayHome}%` }}
         >
           {displayHome > 12 && `${displayHome}%`}
         </div>
         <div
-          className="bg-slate-600 flex items-center justify-center text-white text-xs font-bold transition-all duration-100"
+          className="bg-slate-600 flex items-center justify-center text-white text-sm font-black transition-all duration-100"
           style={{ width: `${displayDraw}%` }}
         >
           {displayDraw > 10 && `${displayDraw}%`}
         </div>
         <div
-          className="bg-amber-600 flex items-center justify-center text-white text-xs font-bold transition-all duration-100"
+          className="bg-amber-600 flex items-center justify-center text-white text-sm font-black transition-all duration-100"
           style={{ width: `${displayAway}%` }}
         >
           {displayAway > 12 && `${displayAway}%`}
         </div>
-      </div>
-      <div className="flex justify-between text-xs font-bold mt-1">
-        <span className="text-blue-400">{displayHome}%</span>
-        <span className="text-slate-400">{displayDraw}%</span>
-        <span className="text-amber-400">{displayAway}%</span>
       </div>
     </div>
   );

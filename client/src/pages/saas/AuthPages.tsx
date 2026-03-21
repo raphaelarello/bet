@@ -1,72 +1,83 @@
-// Rapha Guru — Páginas de Login e Cadastro
+// Rapha Guru — Auth Pages v2 (Tailwind)
 
 import React, { useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/contexts/AuthContext';
-import { Eye, EyeOff, Trophy, Loader2, Mail, Lock, User, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Eye, EyeOff, Trophy, Loader2, Mail, Lock, User, ArrowRight, CheckCircle2, ChevronLeft } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
-// ── Campo de input reutilizável ───────────────────────────────
-function Field({
-  type = 'text', placeholder, value, onChange, Icon, right, error,
-}: {
+function Field({ type = 'text', placeholder, value, onChange, Icon, right, error }: {
   type?: string; placeholder: string; value: string; onChange(v: string): void;
   Icon: React.ElementType; right?: React.ReactNode; error?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
   return (
-    <div style={{ position: 'relative' }}>
-      <Icon style={{
-        position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)',
-        width: 15, height: 15, color: focused ? '#60a5fa' : error ? '#ef4444' : '#4a5568',
-        transition: 'color .15s', pointerEvents: 'none',
-      }} />
-      <input
-        type={type} value={value} placeholder={placeholder}
+    <div className="relative">
+      <Icon className={cn('absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none transition-colors',
+        focused ? 'text-blue-400' : error ? 'text-red-400' : 'text-slate-500')} />
+      <input type={type} value={value} placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
         onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-        style={{
-          width: '100%', padding: '12px 40px 12px 42px', fontSize: 14,
-          borderRadius: 10, outline: 'none', background: 'rgba(255,255,255,0.04)',
-          border: `1px solid ${focused ? '#3b82f6' : error ? '#ef4444' : 'rgba(255,255,255,0.1)'}`,
-          color: '#e8eeff', transition: 'border-color .15s',
-        }}
-      />
-      {right && (
-        <div style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)' }}>
-          {right}
-        </div>
-      )}
+        className={cn('w-full bg-white/[0.04] rounded-xl px-4 pl-10 py-3 text-sm text-slate-100 placeholder:text-slate-600 outline-none transition-all border',
+          focused ? 'border-blue-500/60 bg-blue-500/[0.04]' : error ? 'border-red-500/50' : 'border-white/[0.08] hover:border-white/[0.14]')} />
+      {right && <div className="absolute right-3 top-1/2 -translate-y-1/2">{right}</div>}
     </div>
   );
 }
 
-// ── Barra de força da senha ───────────────────────────────────
 function PasswordStrength({ pwd }: { pwd: string }) {
   if (!pwd) return null;
   const score = [pwd.length >= 8, /[A-Z]/.test(pwd), /[0-9]/.test(pwd), /[^A-Za-z0-9]/.test(pwd)].filter(Boolean).length;
-  const map = ['', 'Fraca', 'Razoável', 'Boa', 'Forte'];
-  const colors = ['', '#ef4444', '#f59e0b', '#3b82f6', '#22c55e'];
+  const bars  = ['', 'bg-red-500', 'bg-amber-500', 'bg-blue-500', 'bg-emerald-500'];
+  const texts = ['', 'text-red-400', 'text-amber-400', 'text-blue-400', 'text-emerald-400'];
+  const labels = ['', 'Fraca', 'Razoável', 'Boa', 'Forte'];
   return (
-    <div style={{ marginTop: 6 }}>
-      <div style={{ display: 'flex', gap: 4, marginBottom: 3 }}>
-        {[1,2,3,4].map(i => (
-          <div key={i} style={{ flex: 1, height: 3, borderRadius: 2, background: i <= score ? colors[score] : 'rgba(255,255,255,0.08)', transition: 'background .2s' }} />
-        ))}
-      </div>
-      <span style={{ fontSize: 11, color: colors[score], fontWeight: 600 }}>{map[score]}</span>
+    <div className="mt-2 space-y-1">
+      <div className="flex gap-1">{[1,2,3,4].map(i => (
+        <div key={i} className={cn('h-0.5 flex-1 rounded-full transition-all', i <= score ? bars[score] : 'bg-white/[0.06]')} />
+      ))}</div>
+      <span className={cn('text-[11px] font-medium', texts[score])}>{labels[score]}</span>
     </div>
   );
 }
 
-// ── LOGIN ─────────────────────────────────────────────────────
+function PageShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-[#07090f] flex items-center justify-center px-4 py-12">
+      {children}
+    </div>
+  );
+}
+
+function BrandMark({ compact }: { compact?: boolean }) {
+  return compact ? (
+    <div className="flex items-center gap-2.5">
+      <div className="w-9 h-9 flex items-center justify-center rounded-xl border border-amber-500/25 bg-amber-500/10">
+        <Trophy className="w-4 h-4 text-amber-400" />
+      </div>
+      <span className="text-base font-black text-white tracking-tight">Rapha Guru</span>
+    </div>
+  ) : (
+    <div className="flex flex-col items-center gap-3">
+      <div className="w-14 h-14 flex items-center justify-center rounded-2xl border border-amber-500/25 bg-amber-500/10">
+        <Trophy className="w-6 h-6 text-amber-400" />
+      </div>
+      <div className="text-center">
+        <div className="text-xl font-black text-white tracking-tight">Rapha Guru</div>
+        <div className="text-xs text-slate-500 mt-0.5">Análise profissional de probabilidades</div>
+      </div>
+    </div>
+  );
+}
+
 export function LoginPage() {
   const [, go] = useLocation();
   const { login } = useAuth();
-  const [email, setEmail]       = useState('');
-  const [pass,  setPass]        = useState('');
-  const [show,  setShow]        = useState(false);
-  const [err,   setErr]         = useState('');
-  const [busy,  setBusy]        = useState(false);
+  const [email, setEmail] = useState('');
+  const [pass,  setPass]  = useState('');
+  const [show,  setShow]  = useState(false);
+  const [err,   setErr]   = useState('');
+  const [busy,  setBusy]  = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setErr(''); setBusy(true);
@@ -76,64 +87,42 @@ export function LoginPage() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: '#07090f', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
-      <div style={{ width: '100%', maxWidth: 400 }}>
-        {/* Logo */}
-        <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'rgba(245,158,11,.12)', border: '1px solid rgba(245,158,11,.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
-            <Trophy style={{ width: 26, height: 26, color: '#f59e0b' }} />
+    <PageShell>
+      <div className="w-full max-w-sm space-y-6">
+        <BrandMark />
+        <div className="bg-slate-900/60 border border-white/[0.07] rounded-2xl p-7 space-y-5">
+          <div>
+            <h2 className="text-base font-bold text-slate-100">Entrar na conta</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Sem conta?{' '}
+              <button onClick={() => go('/cadastro')} className="text-blue-400 font-semibold hover:text-blue-300 transition-colors">Criar agora grátis</button>
+            </p>
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: '#e8eeff', letterSpacing: '-.02em', marginBottom: 4 }}>Rapha Guru</h1>
-          <p style={{ fontSize: 13, color: '#4a5568' }}>Análise profissional de probabilidades</p>
-        </div>
-
-        {/* Card */}
-        <div style={{ background: '#10141f', border: '1px solid rgba(255,255,255,.07)', borderRadius: 16, padding: '28px 28px 24px' }}>
-          <h2 style={{ fontSize: 17, fontWeight: 700, color: '#e8eeff', marginBottom: 4 }}>Entrar na conta</h2>
-          <p style={{ fontSize: 13, color: '#4a5568', marginBottom: 22 }}>
-            Sem conta?{' '}
-            <button onClick={() => go('/cadastro')} style={{ color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-              Criar agora grátis
-            </button>
-          </p>
-
-          <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <form onSubmit={submit} className="space-y-3">
             <Field type="email" placeholder="seu@email.com" value={email} onChange={setEmail} Icon={Mail} error={!!err} />
             <Field type={show ? 'text' : 'password'} placeholder="Senha" value={pass} onChange={setPass} Icon={Lock} error={!!err}
-              right={
-                <button type="button" onClick={() => setShow(s => !s)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4a5568', display: 'flex', padding: 0 }}>
-                  {show ? <EyeOff style={{ width: 15, height: 15 }} /> : <Eye style={{ width: 15, height: 15 }} />}
-                </button>
-              }
-            />
-
-            {err && (
-              <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.2)', fontSize: 13, color: '#ef4444' }}>
-                {err}
-              </div>
-            )}
-
+              right={<button type="button" onClick={() => setShow(s => !s)} className="text-slate-500 hover:text-slate-300 transition-colors">
+                {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>} />
+            {err && <div className="px-3 py-2.5 rounded-xl bg-red-500/[0.08] border border-red-500/20 text-sm text-red-400">{err}</div>}
             <button type="submit" disabled={busy || !email || !pass}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 4, padding: '13px', borderRadius: 10, background: busy || !email || !pass ? '#1c2335' : '#3b82f6', color: busy || !email || !pass ? '#4a5568' : '#fff', fontSize: 14, fontWeight: 700, border: 'none', cursor: busy || !email || !pass ? 'default' : 'pointer', transition: 'all .15s' }}>
-              {busy ? <Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} /> : <ArrowRight style={{ width: 16, height: 16 }} />}
+              className={cn('w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all mt-1',
+                busy || !email || !pass ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white')}>
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
               {busy ? 'Entrando...' : 'Entrar'}
             </button>
           </form>
-
-          <div style={{ textAlign: 'center', marginTop: 14 }}>
-            <button onClick={() => go('/esqueci-senha')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4a5568', fontSize: 12, textDecoration: 'underline' }}>
+          <div className="text-center">
+            <button onClick={() => go('/esqueci-senha')} className="text-xs text-slate-600 hover:text-slate-400 transition-colors underline underline-offset-2">
               Esqueci minha senha
             </button>
           </div>
         </div>
       </div>
-      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
-    </div>
+    </PageShell>
   );
 }
 
-// ── CADASTRO ──────────────────────────────────────────────────
 export function RegisterPage() {
   const [, go] = useLocation();
   const { register } = useAuth();
@@ -154,141 +143,117 @@ export function RegisterPage() {
   const perks = ['5 análises gratuitas por dia', 'Probabilidades em tempo real', 'Sem cartão de crédito', 'Upgrade quando quiser'];
 
   return (
-    <div style={{ minHeight: '100vh', background: '#07090f', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
-      <div style={{ width: '100%', maxWidth: 800, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32, alignItems: 'center' }}>
-
-        {/* Esquerda */}
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 24 }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(245,158,11,.12)', border: '1px solid rgba(245,158,11,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Trophy style={{ width: 20, height: 20, color: '#f59e0b' }} />
-            </div>
-            <span style={{ fontSize: 18, fontWeight: 800, color: '#e8eeff' }}>Rapha Guru</span>
+    <PageShell>
+      <div className="w-full max-w-3xl grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
+        <div className="space-y-6">
+          <BrandMark compact />
+          <div className="space-y-3">
+            <h1 className="text-3xl font-black text-white leading-tight tracking-tight">
+              Análise profissional<br /><span className="text-blue-400">de probabilidades</span>
+            </h1>
+            <p className="text-sm text-slate-400 leading-relaxed">
+              Mais de 40 métricas por partida — gols, escanteios, cartões, handicap asiático, value bets e muito mais.
+            </p>
           </div>
-          <h2 style={{ fontSize: 28, fontWeight: 800, color: '#e8eeff', lineHeight: 1.2, marginBottom: 10, letterSpacing: '-.02em' }}>
-            Análise profissional<br />
-            <span style={{ color: '#60a5fa' }}>de probabilidades</span>
-          </h2>
-          <p style={{ fontSize: 13, color: '#4a5568', lineHeight: 1.65, marginBottom: 22 }}>
-            Mais de 40 métricas por partida — gols, escanteios, cartões, handicap asiático, value bets e muito mais.
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="space-y-3">
             {perks.map(p => (
-              <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#8892b0' }}>
-                <CheckCircle2 style={{ width: 16, height: 16, color: '#22c55e', flexShrink: 0 }} />
-                {p}
+              <div key={p} className="flex items-center gap-3 text-sm text-slate-400">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />{p}
               </div>
             ))}
           </div>
         </div>
-
-        {/* Formulário */}
-        <div style={{ background: '#10141f', border: '1px solid rgba(255,255,255,.07)', borderRadius: 16, padding: '28px 28px 24px' }}>
-          <h2 style={{ fontSize: 17, fontWeight: 700, color: '#e8eeff', marginBottom: 4 }}>Criar conta gratuita</h2>
-          <p style={{ fontSize: 13, color: '#4a5568', marginBottom: 22 }}>
-            Já tem conta?{' '}
-            <button onClick={() => go('/login')} style={{ color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-              Entrar
-            </button>
-          </p>
-
-          <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="bg-slate-900/60 border border-white/[0.07] rounded-2xl p-7 space-y-5">
+          <div>
+            <h2 className="text-base font-bold text-slate-100">Criar conta gratuita</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Já tem conta?{' '}
+              <button onClick={() => go('/login')} className="text-blue-400 font-semibold hover:text-blue-300 transition-colors">Entrar</button>
+            </p>
+          </div>
+          <form onSubmit={submit} className="space-y-3">
             <Field placeholder="Nome completo" value={name} onChange={setName} Icon={User} />
             <Field type="email" placeholder="seu@email.com" value={email} onChange={setEmail} Icon={Mail} />
             <div>
               <Field type={show ? 'text' : 'password'} placeholder="Senha (mín. 8 caracteres)" value={pass} onChange={setPass} Icon={Lock}
-                right={
-                  <button type="button" onClick={() => setShow(s => !s)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4a5568', display: 'flex', padding: 0 }}>
-                    {show ? <EyeOff style={{ width: 15, height: 15 }} /> : <Eye style={{ width: 15, height: 15 }} />}
-                  </button>
-                }
-              />
+                right={<button type="button" onClick={() => setShow(s => !s)} className="text-slate-500 hover:text-slate-300 transition-colors">
+                  {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>} />
               <PasswordStrength pwd={pass} />
             </div>
-
-            {err && (
-              <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.2)', fontSize: 13, color: '#ef4444' }}>
-                {err}
-              </div>
-            )}
-
+            {err && <div className="px-3 py-2.5 rounded-xl bg-red-500/[0.08] border border-red-500/20 text-sm text-red-400">{err}</div>}
             <button type="submit" disabled={busy || !name || !email || pass.length < 8}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 4, padding: '13px', borderRadius: 10, background: busy || !name || !email || pass.length < 8 ? '#1c2335' : '#3b82f6', color: busy || !name || !email || pass.length < 8 ? '#4a5568' : '#fff', fontSize: 14, fontWeight: 700, border: 'none', cursor: 'pointer', transition: 'all .15s' }}>
-              {busy ? <Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} /> : <ArrowRight style={{ width: 16, height: 16 }} />}
+              className={cn('w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all mt-1',
+                busy || !name || !email || pass.length < 8 ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white')}>
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
               {busy ? 'Criando conta...' : 'Criar conta grátis'}
             </button>
           </form>
         </div>
       </div>
-      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
-    </div>
+    </PageShell>
   );
 }
 
 export function ForgotPasswordPage() {
   const [, go] = useLocation();
   const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [sent,  setSent]  = useState(false);
+  const [busy,  setBusy]  = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true);
     try {
-      await fetch('/api/auth/forgot-password', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
+      await fetch('/api/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
       setSent(true);
     } catch {}
     setBusy(false);
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: '#07090f', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
-      <div style={{ width: '100%', maxWidth: 400 }}>
-        <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'rgba(245,158,11,.12)', border: '1px solid rgba(245,158,11,.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
-            <Trophy style={{ width: 26, height: 26, color: '#f59e0b' }} />
-          </div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: '#e8eeff', letterSpacing: '-.02em' }}>Rapha Guru</h1>
-        </div>
-
-        <div style={{ background: '#10141f', border: '1px solid rgba(255,255,255,.07)', borderRadius: 16, padding: '28px 28px 24px' }}>
+    <PageShell>
+      <div className="w-full max-w-sm space-y-6">
+        <BrandMark />
+        <div className="bg-slate-900/60 border border-white/[0.07] rounded-2xl p-7">
           {sent ? (
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 40, marginBottom: 14 }}>📧</div>
-              <h2 style={{ fontSize: 17, fontWeight: 700, color: '#e8eeff', marginBottom: 8 }}>Verifique seu e-mail</h2>
-              <p style={{ fontSize: 13, color: '#4a5568', marginBottom: 20 }}>
-                Se o e-mail <strong style={{ color: '#60a5fa' }}>{email}</strong> estiver cadastrado, você receberá as instruções em breve.
-              </p>
-              <button onClick={() => go('/login')} style={{ padding: '11px 24px', borderRadius: 10, background: '#3b82f6', color: '#fff', fontSize: 13, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+            <div className="text-center space-y-4 py-2">
+              <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-7 h-7 text-emerald-400" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-100">Verifique seu e-mail</h2>
+                <p className="text-sm text-slate-500 mt-2 leading-relaxed">
+                  Se <span className="text-blue-400 font-medium">{email}</span> estiver cadastrado, você receberá as instruções em breve.
+                </p>
+              </div>
+              <button onClick={() => go('/login')} className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold transition-colors">
                 Voltar ao login
               </button>
             </div>
           ) : (
-            <>
-              <h2 style={{ fontSize: 17, fontWeight: 700, color: '#e8eeff', marginBottom: 4 }}>Recuperar senha</h2>
-              <p style={{ fontSize: 13, color: '#4a5568', marginBottom: 22 }}>
-                Digite seu e-mail e enviaremos as instruções.
-              </p>
-              <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div className="space-y-5">
+              <div>
+                <h2 className="text-base font-bold text-slate-100">Recuperar senha</h2>
+                <p className="text-sm text-slate-500 mt-1">Digite seu e-mail e enviaremos as instruções.</p>
+              </div>
+              <form onSubmit={submit} className="space-y-3">
                 <Field type="email" placeholder="seu@email.com" value={email} onChange={setEmail} Icon={Mail} />
                 <button type="submit" disabled={busy || !email}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '13px', borderRadius: 10, background: busy || !email ? '#1c2335' : '#3b82f6', color: busy || !email ? '#4a5568' : '#fff', fontSize: 14, fontWeight: 700, border: 'none', cursor: busy || !email ? 'default' : 'pointer', fontFamily: 'inherit' }}>
-                  {busy ? <Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} /> : <ArrowRight style={{ width: 16, height: 16 }} />}
+                  className={cn('w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all',
+                    busy || !email ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white')}>
+                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
                   {busy ? 'Enviando...' : 'Enviar instruções'}
                 </button>
               </form>
-              <div style={{ textAlign: 'center', marginTop: 14 }}>
-                <button onClick={() => go('/login')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4a5568', fontSize: 12 }}>
-                  ← Voltar ao login
+              <div className="text-center">
+                <button onClick={() => go('/login')} className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-400 transition-colors">
+                  <ChevronLeft className="w-3 h-3" /> Voltar ao login
                 </button>
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>
-      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
-    </div>
+    </PageShell>
   );
 }

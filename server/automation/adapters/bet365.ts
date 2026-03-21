@@ -1,119 +1,153 @@
 /**
- * Rapha Guru — Adapter bet365
+ * Rapha Guru — bet365 Adapter v3.0
  */
 import type { Page } from 'playwright';
 import type { BookmakerAdapter } from '../engine.js';
 import type { BetOrder, BetResult } from '../types.js';
-import { humanType, humanClick, fillStakeInput, waitForElementHuman, hasCaptcha, DELAYS, humanDelay } from '../human.js';
+import { humanType, humanClick, fillStakeInput, waitForSelector, hasCaptcha, trySelectors, DELAYS, humanDelay } from '../human.js';
 
-const BASE_URL = 'https://www.bet365.bet.br';
+const BASE = 'https://www.bet365.bet.br';
 
 export class Bet365Adapter implements BookmakerAdapter {
   constructor(private page: Page) {}
 
   async isLoggedIn(): Promise<boolean> {
     try {
-      await this.page.goto(`${BASE_URL}/#/HO/`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await this.page.goto(`${BASE}/#/HO/`, { waitUntil: 'domcontentloaded', timeout: 15000 });
       await DELAYS.afterPageLoad();
-      const el = await this.page.$('.hm-BalanceWithBetslip_Balance, .hm-LoggedInHeader, [class*="Balance"]');
-      return !!el;
+      return !!(await this.page.$('.hm-BalanceWithBetslip_Balance, .hm-LoggedInHeader, [class*="BalanceWithBetslip"], [class*="LoggedIn"]'));
     } catch { return false; }
   }
 
   async login(username: string, password: string): Promise<boolean> {
     try {
-      await this.page.goto(`${BASE_URL}/#/HO/`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await this.page.goto(`${BASE}/#/HO/`, { waitUntil: 'domcontentloaded', timeout: 20000 });
       await DELAYS.afterPageLoad();
-
       if (await hasCaptcha(this.page)) return false;
 
-      // bet365 usa modal de login
-      await humanClick(this.page, '.hm-LoginButton, [class*="LoginButton"], button:has-text("Entrar")', { timeout: 8000 });
+      await trySelectors(this.page, [
+        '.hm-LoginButton, [class*="LoginButton"]',
+        'button:has-text("Entrar")',
+        '[aria-label*="Login" i]',
+      ], 'click', undefined, 8000);
       await DELAYS.afterPageLoad();
 
-      await humanType(this.page, 'input[name="username"], input[id*="username"], input[placeholder*="Usuário"]', username);
+      await trySelectors(this.page, ['input[name="username"]', 'input[id*="username"]', 'input[placeholder*="Usuário" i]'], 'fill', username, 5000);
       await humanDelay(600, 150);
-      await humanType(this.page, 'input[name="password"], input[type="password"]', password);
+      await trySelectors(this.page, ['input[name="password"]', 'input[type="password"]'], 'fill', password, 5000);
       await DELAYS.beforeClick();
-
-      await humanClick(this.page, 'button[type="submit"], .lpb-LoginButtonV2, button:has-text("Entrar")', { timeout: 5000 });
+      await trySelectors(this.page, ['button[type="submit"]', '.lpb-LoginButtonV2', 'button:has-text("Entrar")'], 'click', undefined, 5000);
       await DELAYS.afterLogin();
-
       return await this.isLoggedIn();
     } catch { return false; }
   }
 
   async getBalance(): Promise<number | null> {
     try {
-      const el = await this.page.$('.hm-BalanceWithBetslip_Balance, [class*="Balance"]');
+      const el = await this.page.$('.hm-BalanceWithBetslip_Balance, [class*="BalanceWithBetslip"]');
       if (!el) return null;
       const text = await el.textContent() ?? '';
-      const match = text.match(/[\d.,]+/);
-      return match ? parseFloat(match[0].replace(/\./g, '').replace(',', '.')) : null;
+      const m = text.match(/[\d.,]+/);
+      return m ? parseFloat(m[0].replace(/\./g, '').replace(',', '.')) : null;
     } catch { return null; }
   }
 
   async searchMatch(homeTeam: string, awayTeam: string): Promise<string | null> {
-    return null; // bet365 usa navegação interna
+    try {
+      await this.page.goto(`${BASE}/#/SO/`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await DELAYS.afterPageLoad();
+
+      // bet365 search
+      const searchOk = await trySelectors(this.page, [
+        '.sm-Search, [class*="SearchBox"]',
+        'button[aria-label*="Pesquisar" i]',
+        '[class*="SearchIcon"]',
+      ], 'click', undefined, 5000);
+
+      if (searchOk) {
+        await trySelectors(this.page, ['input[type="search"]', '.sm-SearchInput'], 'fill', homeTeam, 3000);
+        await DELAYS.afterSearch();
+
+        const links = await this.page.$$('a[href*="futebol"], a[href*="soccer"]');
+        for (const link of links) {
+          const txt = (await link.textContent() ?? '').toLowerCase();
+          if (txt.includes(homeTeam.toLowerCase()) && txt.includes(awayTeam.toLowerCase())) {
+            return await link.getAttribute('href');
+          }
+        }
+      }
+      return null;
+    } catch { return null; }
   }
 
   async placeBet(order: BetOrder): Promise<BetResult> {
-    const timestamp = new Date().toISOString();
+    const ts = new Date().toISOString();
     try {
-      // Navega para futebol
-      await this.page.goto(`${BASE_URL}/#/SO/`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await this.page.goto(`${BASE}/#/SO/`, { waitUntil: 'domcontentloaded', timeout: 20000 });
       await DELAYS.afterPageLoad();
 
-      // Busca pelo jogo
-      const searchClicked = await humanClick(this.page, '.sm-Search, [class*="SearchBox"], button[aria-label*="Pesquisar"]', { timeout: 5000 }).then(() => true).catch(() => false);
-      if (searchClicked) {
-        await humanType(this.page, 'input[type="search"], .sm-SearchInput', order.homeTeam);
-        await DELAYS.afterSearch();
+      const matchUrl = await this.searchMatch(order.homeTeam, order.awayTeam);
+      if (matchUrl) {
+        await this.page.goto(matchUrl.startsWith('http') ? matchUrl : `${BASE}${matchUrl}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await DELAYS.afterPageLoad();
       }
 
-      // Tenta clicar no mercado
       const marketTexts = this.getMarketTexts(order);
       let clicked = false;
       for (const text of marketTexts) {
         try {
-          await humanClick(this.page, `text="${text}"`, { timeout: 3000 });
-          clicked = true;
-          break;
+          const el = await this.page.locator(`text="${text}"`).first().elementHandle({ timeout: 2000 });
+          if (el) { await humanClick(this.page, `text="${text}"`); clicked = true; break; }
         } catch { continue; }
       }
-      if (!clicked) return { success: false, bookmaker: 'bet365', order, error: 'Mercado não encontrado', timestamp };
+      if (!clicked) return { success: false, bookmaker: 'bet365', order, error: 'Mercado não encontrado', errorCode: 'MARKET_CLOSED', timestamp: ts };
 
-      await humanDelay(1000, 300);
+      const betslipOk = await waitForSelector(this.page, '.bs-BetslipBox, [class*="BetslipBox"], .bss-StandardSinglesBet', 10000);
+      if (!betslipOk) return { success: false, bookmaker: 'bet365', order, error: 'Betslip não apareceu', errorCode: 'CONFIRM_FAILED', timestamp: ts };
 
-      // Preenche stake
-      const stakeOk = await fillStakeInput(this.page, 'input.bs3-StandardBetslip_AmountInput, [class*="stakeInput"], input[aria-label*="Aposta"]', order.stake).then(() => true).catch(() => false);
-      if (!stakeOk) return { success: false, bookmaker: 'bet365', order, error: 'Campo stake não encontrado', timestamp };
+      await humanDelay(800, 200);
+
+      const stakeOk = await trySelectors(this.page,
+        ['input.bss-BetStakeInput, [class*="BetStakeInput"]', 'input[class*="stake" i]', '.bs-BetslipBox input[type="text"]'],
+        'fill', order.stake.toFixed(2).replace('.', ','), 5000
+      );
+      if (!stakeOk) return { success: false, bookmaker: 'bet365', order, error: 'Campo stake não encontrado', errorCode: 'CONFIRM_FAILED', timestamp: ts };
 
       await DELAYS.beforeBetConfirm();
 
-      // Confirma
-      const confirmed = await humanClick(this.page, '.bs3-StandardBetslip_PlaceBetsBtn, button:has-text("Fazer Aposta"), button:has-text("Confirmar Aposta")', { timeout: 5000 }).then(() => true).catch(() => false);
-      if (!confirmed) return { success: false, bookmaker: 'bet365', order, error: 'Botão confirmar não encontrado', timestamp };
+      const confirmOk = await trySelectors(this.page,
+        ['.bs-PlaceBets, [class*="PlaceBets"]', 'button:has-text("Fazer aposta")', 'button:has-text("Confirmar")'],
+        'click', undefined, 6000
+      );
+      if (!confirmOk) return { success: false, bookmaker: 'bet365', order, error: 'Confirmar não encontrado', errorCode: 'CONFIRM_FAILED', timestamp: ts };
 
       await DELAYS.afterBetConfirm();
 
-      const success = await waitForElementHuman(this.page, '.bsp-BetPlaced, [class*="BetPlaced"], text="Aposta realizada"', 8000);
-      return {
-        success, bookmaker: 'bet365', order,
-        betId: success ? `B365_${Date.now()}` : undefined,
-        error: success ? undefined : 'Confirmação não detectada',
-        timestamp,
-      };
+      // Success check
+      const successEl = await this.page.$('.bs-ReceiptSingle, [class*="Receipt"], [class*="BetSuccess"]');
+      if (successEl) {
+        return { success: true, bookmaker: 'bet365', order, betId: `B365_${Date.now()}`, confirmedOdds: order.odds, confirmedStake: order.stake, timestamp: ts };
+      }
+
+      const errEl = await this.page.$('[class*="Error"], [class*="Alert"], [role="alert"]');
+      const errMsg = errEl ? await errEl.textContent() : null;
+      return { success: false, bookmaker: 'bet365', order, error: errMsg ?? 'Confirmação não detectada', errorCode: 'CONFIRM_FAILED', timestamp: ts };
+
     } catch (err) {
-      return { success: false, bookmaker: 'bet365', order, error: err instanceof Error ? err.message : String(err), timestamp };
+      return { success: false, bookmaker: 'bet365', order, error: err instanceof Error ? err.message : String(err), errorCode: 'NETWORK_ERROR', timestamp: ts };
     }
   }
 
   private getMarketTexts(order: BetOrder): string[] {
+    const lineMatch = order.marketLabel.match(/(\d+\.?\d*)/);
+    const line = lineMatch ? lineMatch[1] : '2.5';
     const map: Record<string, string[]> = {
-      over_goals: ['Mais de 2,5 Gols', 'Acima de 2,5', 'Over 2.5'],
-      result: [order.selection === 'home' ? order.homeTeam : order.selection === 'away' ? order.awayTeam : 'Empate X'],
-      btts: ['Ambas Marcam', 'Sim'],
+      result:     order.selection === 'home' ? ['1', order.homeTeam] : order.selection === 'away' ? ['2', order.awayTeam] : ['X', 'Empate'],
+      over_goals: [`Mais de ${line}`, `Over ${line}`, `Acima de ${line}`],
+      btts:       ['Ambas marcam - Sim', 'Sim'],
+      corners:    [`Mais de ${line}`, `Escanteios Over ${line}`],
+      cards:      [`Mais de ${line}`, 'Cartões'],
+      halftime:   ['Intervalo/Final', '1º Tempo'],
     };
     return map[order.marketType] ?? [order.marketLabel];
   }

@@ -1,9 +1,6 @@
 /**
- * Rapha Guru — API REST de Automação
- * Expõe endpoints para o frontend controlar o motor de apostas
- * 
- * Credenciais são criptografadas com AES-256 antes de persistir.
- * A chave é gerada automaticamente e fica em data/key.bin (não versionar).
+ * Rapha Guru — Automation API Router v3.0
+ * Credenciais criptografadas AES-256 · Fila com mutex · Retry automático
  */
 
 import express from 'express';
@@ -15,229 +12,227 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 
 const router = express.Router();
+
 const DATA_DIR      = path.resolve(process.cwd(), 'data');
 const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.enc.json');
 const KEY_FILE      = path.join(DATA_DIR, 'key.bin');
 
-// ── Criptografia simples para credenciais em disco ────────────
-
-function getOrCreateKey(): Buffer {
-  if (fs.existsSync(KEY_FILE)) {
-    return fs.readFileSync(KEY_FILE);
-  }
+// ── AES-256 encryption ────────────────────────────────────────
+function getKey(): Buffer {
+  if (fs.existsSync(KEY_FILE)) return fs.readFileSync(KEY_FILE);
   const key = crypto.randomBytes(32);
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(KEY_FILE, key, { mode: 0o600 }); // só dono pode ler
+  fs.writeFileSync(KEY_FILE, key, { mode: 0o600 });
   return key;
 }
 
 function encrypt(text: string): string {
-  const key = getOrCreateKey();
-  const iv  = crypto.randomBytes(16);
+  const key = getKey(), iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
-  return iv.toString('hex') + ':' + encrypted.toString('hex');
+  return iv.toString('hex') + ':' + Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]).toString('hex');
 }
 
 function decrypt(data: string): string {
-  const key = getOrCreateKey();
-  const [ivHex, encHex] = data.split(':');
-  const iv = Buffer.from(ivHex, 'hex');
-  const enc = Buffer.from(encHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-  return decipher.update(enc).toString('utf8') + decipher.final().toString('utf8');
+  const key = getKey(), [ivHex, encHex] = data.split(':');
+  const decipher = crypto.createDecipheriv('aes-256-cbc', key, Buffer.from(ivHex, 'hex'));
+  return decipher.update(Buffer.from(encHex, 'hex')).toString('utf8') + decipher.final().toString('utf8');
 }
 
-// ── Persistência de contas ────────────────────────────────────
-
+// ── Account persistence ───────────────────────────────────────
 function loadAccounts(): BookmakerAccount[] {
   try {
     if (!fs.existsSync(ACCOUNTS_FILE)) return [];
-    const raw = fs.readFileSync(ACCOUNTS_FILE, 'utf8');
-    const records = JSON.parse(raw) as Array<BookmakerAccount & { _pwd: string }>;
-    return records.map(r => ({
-      ...r,
-      password: decrypt(r._pwd),
-      _pwd: undefined as unknown as string,
-    }));
+    const records = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8')) as Array<BookmakerAccount & { _pwd: string }>;
+    return records.map(r => ({ ...r, password: decrypt(r._pwd), _pwd: undefined as unknown as string }));
   } catch { return []; }
 }
 
 function saveAccounts(accounts: BookmakerAccount[]) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  const records = accounts.map(a => ({
-    ...a,
-    password: '',          // nunca salva em claro
-    _pwd: encrypt(a.password),
-  }));
-  fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(records, null, 2), { mode: 0o600 });
+  fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(
+    accounts.map(a => ({ ...a, password: '', _pwd: encrypt(a.password) })), null, 2
+  ), { mode: 0o600 });
 }
 
-// ── Limites de segurança ──────────────────────────────────────
-
+// ── Validation helpers ────────────────────────────────────────
 function checkLimits(account: BookmakerAccount, order: BetOrder): string | null {
   if (order.stake > account.maxSingleStake) {
-    return `Stake R$ ${order.stake} excede o limite por aposta (R$ ${account.maxSingleStake})`;
+    return `Stake R$ ${order.stake} excede limite por aposta (R$ ${account.maxSingleStake})`;
   }
-  // Aqui poderia somar o total do dia, mas isso requer histórico
+  if (order.odds < (account.minOddsAccepted ?? 1.01)) {
+    return `Odd ${order.odds} abaixo do mínimo configurado (${account.minOddsAccepted ?? 1.01})`;
+  }
+  if (account.maxOddsAccepted && order.odds > account.maxOddsAccepted) {
+    return `Odd ${order.odds} acima do máximo configurado (${account.maxOddsAccepted})`;
+  }
   return null;
 }
 
-// ────────────────────────────────────────────────────────────────
-// ENDPOINTS
-// ────────────────────────────────────────────────────────────────
+// ── Routes ────────────────────────────────────────────────────
 
-// GET /api/automation/bookmakers — lista casas suportadas
 router.get('/bookmakers', (_req, res) => {
-  const list = Object.entries(BOOKMAKER_DEFS).map(([id, def]) => ({
-    ...def,
-    supported: !!ADAPTERS[id],
-  }));
-  res.json({ bookmakers: list });
+  res.json({ bookmakers: Object.entries(BOOKMAKER_DEFS).map(([id, def]) => ({ ...def, supported: !!ADAPTERS[id] })) });
 });
 
-// GET /api/automation/accounts — lista contas (sem senhas)
 router.get('/accounts', (_req, res) => {
-  const accounts = loadAccounts().map(a => ({ ...a, password: '***' }));
-  res.json({ accounts });
+  res.json({ accounts: loadAccounts().map(a => ({ ...a, password: '***' })) });
 });
 
-// POST /api/automation/accounts — adiciona/atualiza conta
 router.post('/accounts', express.json(), (req, res) => {
   const body = req.body as Partial<BookmakerAccount>;
-
   if (!body.bookmaker || !body.username || !body.password) {
     return res.status(400).json({ error: 'bookmaker, username e password são obrigatórios' });
   }
-
   if (!ADAPTERS[body.bookmaker]) {
     return res.status(400).json({ error: `Casa "${body.bookmaker}" não suportada` });
   }
-
   const accounts = loadAccounts();
-  const existing = accounts.findIndex(a => a.id === body.id);
-
   const account: BookmakerAccount = {
-    id:              body.id ?? `${body.bookmaker}_${Date.now()}`,
-    bookmaker:       body.bookmaker,
-    name:            body.name ?? body.bookmaker,
-    username:        body.username,
-    password:        body.password,
-    maxDailyStake:   body.maxDailyStake ?? 500,
-    maxSingleStake:  body.maxSingleStake ?? 100,
-    enabled:         body.enabled ?? true,
-    createdAt:       body.createdAt ?? new Date().toISOString(),
+    id:               body.id ?? `${body.bookmaker}_${Date.now()}`,
+    bookmaker:        body.bookmaker,
+    name:             body.name ?? body.bookmaker,
+    username:         body.username,
+    password:         body.password,
+    maxDailyStake:    body.maxDailyStake ?? 500,
+    maxSingleStake:   body.maxSingleStake ?? 100,
+    maxOddsAccepted:  body.maxOddsAccepted ?? 10,
+    minOddsAccepted:  body.minOddsAccepted ?? 1.05,
+    enabled:          body.enabled ?? true,
+    createdAt:        body.createdAt ?? new Date().toISOString(),
   };
-
-  if (existing >= 0) {
-    accounts[existing] = account;
-  } else {
-    accounts.push(account);
-  }
-
+  const idx = accounts.findIndex(a => a.id === account.id);
+  if (idx >= 0) accounts[idx] = account; else accounts.push(account);
   saveAccounts(accounts);
   res.json({ success: true, account: { ...account, password: '***' } });
 });
 
-// DELETE /api/automation/accounts/:id — remove conta
-router.delete('/accounts/:id', (req, res) => {
-  const accounts = loadAccounts().filter(a => a.id !== req.params.id);
+router.patch('/accounts/:id', express.json(), (req, res) => {
+  const accounts = loadAccounts();
+  const idx = accounts.findIndex(a => a.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Conta não encontrada' });
+  const body = req.body as Partial<BookmakerAccount>;
+  accounts[idx] = { ...accounts[idx], ...body, id: accounts[idx].id };
   saveAccounts(accounts);
   res.json({ success: true });
 });
 
-// POST /api/automation/login — faz login em uma casa
+router.delete('/accounts/:id', (_req, res) => {
+  saveAccounts(loadAccounts().filter(a => a.id !== _req.params.id));
+  res.json({ success: true });
+});
+
 router.post('/login', express.json(), async (req, res) => {
   const { accountId } = req.body as { accountId: string };
   const account = loadAccounts().find(a => a.id === accountId);
-
   if (!account) return res.status(404).json({ error: 'Conta não encontrada' });
-
   const result = await engine.login(account);
   res.json(result);
 });
 
-// GET /api/automation/status — status de todas as casas
 router.get('/status', (_req, res) => {
   res.json({ status: engine.getAllStatus() });
 });
 
-// GET /api/automation/balance/:bookmaker — saldo
 router.get('/balance/:bookmaker', async (req, res) => {
   const balance = await engine.getBalance(req.params.bookmaker);
   res.json({ bookmaker: req.params.bookmaker, balance });
 });
 
-// POST /api/automation/bet — executa aposta
+// ── Bet — single, immediate ────────────────────────────────────
 router.post('/bet', express.json(), async (req, res) => {
   const { accountId, order } = req.body as { accountId: string; order: BetOrder };
-
-  if (!accountId || !order) {
-    return res.status(400).json({ error: 'accountId e order são obrigatórios' });
-  }
+  if (!accountId || !order) return res.status(400).json({ error: 'accountId e order obrigatórios' });
 
   const account = loadAccounts().find(a => a.id === accountId);
   if (!account) return res.status(404).json({ error: 'Conta não encontrada' });
   if (!account.enabled) return res.status(400).json({ error: 'Conta desativada' });
 
-  const limitError = checkLimits(account, order);
-  if (limitError) return res.status(400).json({ error: limitError });
+  const limitErr = checkLimits(account, order);
+  if (limitErr) return res.status(400).json({ error: limitErr });
 
-  const result = await engine.placeBet(account.bookmaker, order);
+  const result = await engine.placeBet(account.bookmaker, order, account);
   res.json(result);
 });
 
-// POST /api/automation/bet/multi — aposta em múltiplas casas
+// ── Multi-bet — parallel across bookmakers ─────────────────────
 router.post('/bet/multi', express.json(), async (req, res) => {
   const { accountIds, order } = req.body as { accountIds: string[]; order: BetOrder };
-
   const accounts = loadAccounts().filter(a => accountIds.includes(a.id) && a.enabled);
-  if (accounts.length === 0) return res.status(400).json({ error: 'Nenhuma conta válida' });
+  if (!accounts.length) return res.status(400).json({ error: 'Nenhuma conta válida' });
 
   const results = await Promise.allSettled(
     accounts.map(async account => {
-      const limitError = checkLimits(account, order);
-      if (limitError) return { success: false, bookmaker: account.bookmaker, error: limitError };
-      return engine.placeBet(account.bookmaker, order);
+      const err = checkLimits(account, order);
+      if (err) return { success: false, bookmaker: account.bookmaker, error: err };
+      return engine.placeBet(account.bookmaker, order, account);
     })
   );
 
-  res.json({
-    results: results.map((r, i) => ({
-      bookmaker: accounts[i]?.bookmaker,
-      ...(r.status === 'fulfilled' ? r.value : { success: false, error: r.reason }),
-    })),
-  });
+  res.json({ results: results.map((r, i) => ({
+    bookmaker: accounts[i]?.bookmaker,
+    ...(r.status === 'fulfilled' ? r.value : { success: false, error: String(r.reason) }),
+  })) });
 });
 
-// GET /api/automation/logs — histórico de apostas
-router.get('/logs', (_req, res) => {
-  try {
-    const LOG_DIR = path.join(DATA_DIR, 'bet_logs');
-    if (!fs.existsSync(LOG_DIR)) return res.json({ entries: [] });
-
-    const files = fs.readdirSync(LOG_DIR)
-      .filter(f => f.endsWith('.jsonl'))
-      .sort()
-      .slice(-7); // últimos 7 dias
-
-    const entries: unknown[] = [];
-    for (const file of files) {
-      const lines = fs.readFileSync(path.join(LOG_DIR, file), 'utf8').trim().split('\n');
-      for (const line of lines) {
-        if (line) {
-          try { entries.push(JSON.parse(line)); } catch { /* skip */ }
-        }
-      }
-    }
-
-    res.json({ entries: entries.reverse() }); // mais recentes primeiro
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
+// ── Queue endpoints ────────────────────────────────────────────
+router.get('/queue', (_req, res) => {
+  res.json({ queue: engine.getQueue() });
 });
 
-// POST /api/automation/shutdown — encerra browser
+router.post('/queue', express.json(), (req, res) => {
+  const { accountId, order, maxRetries = 3 } = req.body as { accountId: string; order: BetOrder; maxRetries?: number };
+  const account = loadAccounts().find(a => a.id === accountId);
+  if (!account) return res.status(404).json({ error: 'Conta não encontrada' });
+
+  const err = checkLimits(account, order);
+  if (err) return res.status(400).json({ error: err });
+
+  const item = engine.addToQueue(accountId, account.bookmaker, order, maxRetries);
+  res.json({ success: true, queueItemId: item.id, item });
+});
+
+router.post('/queue/run', express.json(), async (req, res) => {
+  const accounts = loadAccounts();
+  const results  = await engine.runQueue(accounts);
+  res.json({ results });
+});
+
+router.delete('/queue/:id', (req, res) => {
+  const ok = engine.cancelQueueItem(req.params.id);
+  res.json({ success: ok, message: ok ? 'Cancelado' : 'Item não encontrado ou já executando' });
+});
+
+router.delete('/queue', (_req, res) => {
+  engine.clearQueue();
+  res.json({ success: true });
+});
+
+// ── Logs ──────────────────────────────────────────────────────
+router.get('/logs', (req, res) => {
+  const days = Number((req.query as Record<string, string>).days ?? 7);
+  res.json({ entries: engine.getLogs(days) });
+});
+
+// ── Screenshots ───────────────────────────────────────────────
+router.get('/screenshots', (_req, res) => {
+  const dir = path.resolve(process.cwd(), 'data', 'screenshots');
+  if (!fs.existsSync(dir)) return res.json({ files: [] });
+  const files = fs.readdirSync(dir)
+    .filter(f => f.endsWith('.png'))
+    .sort()
+    .reverse()
+    .slice(0, 50)
+    .map(f => ({ name: f, ts: f.split('_')[1], bookmaker: f.split('_')[0], ok: f.includes('_ok') }));
+  res.json({ files });
+});
+
+router.get('/screenshots/:name', (req, res) => {
+  const file = path.resolve(process.cwd(), 'data', 'screenshots', req.params.name.replace(/\//g, ''));
+  if (!fs.existsSync(file) || !file.endsWith('.png')) return res.status(404).end();
+  res.setHeader('Content-Type', 'image/png');
+  fs.createReadStream(file).pipe(res);
+});
+
 router.post('/shutdown', async (_req, res) => {
   await engine.shutdown();
   res.json({ success: true });

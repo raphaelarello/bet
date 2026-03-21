@@ -363,6 +363,12 @@ function ValueBetsPanel({ valueBets }: { valueBets: ValueBet[] }) {
               <div className="text-xs text-slate-600">Nossa Odd</div>
               <div className="text-sm font-bold text-emerald-400 font-mono">{vb.ourOdds.toFixed(2)}</div>
             </div>
+            {vb.kellyPct != null && vb.kellyPct > 0 && (
+              <div className="flex-1 text-center">
+                <div className="text-xs text-slate-600">Kelly ½</div>
+                <div className="text-sm font-bold text-amber-400 font-mono">{vb.kellyPct.toFixed(1)}%</div>
+              </div>
+            )}
           </div>
         </div>
       ))}
@@ -1338,21 +1344,25 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
             <div className="grid grid-cols-2 gap-2">
               {/* Time da casa */}
               <div className="rounded-xl border border-slate-800/70 bg-slate-900/40 p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300 truncate max-w-[120px]">{match.strHomeTeam}</span>
-                  <span className="text-[10px] text-slate-400 font-mono">{homeTeamStats.formPoints}/15pts</span>
+                <div className="flex items-center justify-between mb-2">
+                  {/* Badge de perfil ou label Casa */}
+                  {(() => {
+                    const p = getTeamProfile(homeTeamStats);
+                    return p ? (
+                      <div className={cn('inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold border truncate max-w-[calc(100%-48px)]', p.bg, p.color)}>
+                        {p.label}
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-slate-400 font-medium">Casa</span>
+                    );
+                  })()}
+                  <span className="text-[11px] text-slate-300 font-mono flex-shrink-0">{homeTeamStats.formPoints}/15pts</span>
                 </div>
-                {/* Badge de perfil */}
-                {(() => { const p = getTeamProfile(homeTeamStats); return p ? (
-                  <div className={cn('inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold border mb-2', p.bg, p.color)}>
-                    {p.label}
-                  </div>
-                ) : <div className="mb-2" />; })()}
                 {/* Últimos 5 resultados */}
                 <div className="flex gap-1 mb-2">
                   {homeTeamStats.form.slice(0, 5).map((r, i) => (
                     <span key={i} className={cn(
-                      'w-5 h-5 rounded flex items-center justify-center text-[10px] font-black flex-shrink-0',
+                      'w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-black flex-shrink-0',
                       r === 'W' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                       : r === 'D' ? 'bg-slate-600/40 text-slate-400 border border-slate-600/50'
                       : 'bg-red-500/20 text-red-400 border border-red-500/30'
@@ -1362,8 +1372,8 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
                 {/* Últimos placares */}
                 <div className="space-y-0.5">
                   {homeTeamStats.recentMatches.slice(0, 3).map((m, i) => (
-                    <div key={i} className="flex items-center justify-between text-[10px]">
-                      <span className="text-slate-400 truncate max-w-[100px]">
+                    <div key={i} className="flex items-center justify-between text-[12px]">
+                      <span className="text-slate-300 truncate max-w-[110px]">
                         {m.isHome ? `x ${m.awayTeam.split(' ')[0]}` : `em ${m.homeTeam.split(' ')[0]}`}
                       </span>
                       <span className={cn('font-bold font-mono tabular-nums flex-shrink-0',
@@ -1377,36 +1387,39 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
                 {/* Stats rápidos */}
                 <div className="mt-2 flex gap-3 border-t border-slate-800/60 pt-2">
                   <div className="text-center flex-1">
-                    <div className="text-[13px] font-black text-emerald-300">{homeTeamStats.avgGoalsScored.toFixed(1)}</div>
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Gols/j</div>
+                    <div className="text-[15px] font-black text-emerald-300">{homeTeamStats.avgGoalsScored.toFixed(1)}</div>
+                    <div className="text-[11px] text-slate-400 font-semibold">Gols/j</div>
                   </div>
                   <div className="text-center flex-1">
-                    <div className="text-[13px] font-black text-red-300">{homeTeamStats.avgGoalsConceded.toFixed(1)}</div>
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Sofre/j</div>
+                    <div className="text-[15px] font-black text-red-300">{homeTeamStats.avgGoalsConceded.toFixed(1)}</div>
+                    <div className="text-[11px] text-slate-400 font-semibold">Sofre/j</div>
                   </div>
                   <div className="text-center flex-1">
-                    <div className="text-[13px] font-black text-blue-300">{Math.round(homeTeamStats.winRate * 100)}%</div>
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">V%</div>
+                    <div className="text-[15px] font-black text-blue-300">{Math.round(homeTeamStats.winRate * 100)}%</div>
+                    <div className="text-[11px] text-slate-400 font-semibold">V%</div>
                   </div>
                 </div>
               </div>
 
               {/* Time visitante */}
               <div className="rounded-xl border border-slate-800/70 bg-slate-900/40 p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300 truncate max-w-[120px]">{match.strAwayTeam}</span>
-                  <span className="text-[10px] text-slate-400 font-mono">{awayTeamStats.formPoints}/15pts</span>
+                <div className="flex items-center justify-between mb-2">
+                  {(() => {
+                    const p = getTeamProfile(awayTeamStats);
+                    return p ? (
+                      <div className={cn('inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold border truncate max-w-[calc(100%-48px)]', p.bg, p.color)}>
+                        {p.label}
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-slate-400 font-medium">Visitante</span>
+                    );
+                  })()}
+                  <span className="text-[11px] text-slate-300 font-mono flex-shrink-0">{awayTeamStats.formPoints}/15pts</span>
                 </div>
-                {/* Badge de perfil */}
-                {(() => { const p = getTeamProfile(awayTeamStats); return p ? (
-                  <div className={cn('inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold border mb-2', p.bg, p.color)}>
-                    {p.label}
-                  </div>
-                ) : <div className="mb-2" />; })()}
                 <div className="flex gap-1 mb-2">
                   {awayTeamStats.form.slice(0, 5).map((r, i) => (
                     <span key={i} className={cn(
-                      'w-5 h-5 rounded flex items-center justify-center text-[10px] font-black flex-shrink-0',
+                      'w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-black flex-shrink-0',
                       r === 'W' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                       : r === 'D' ? 'bg-slate-600/40 text-slate-400 border border-slate-600/50'
                       : 'bg-red-500/20 text-red-400 border border-red-500/30'
@@ -1415,8 +1428,8 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
                 </div>
                 <div className="space-y-0.5">
                   {awayTeamStats.recentMatches.slice(0, 3).map((m, i) => (
-                    <div key={i} className="flex items-center justify-between text-[10px]">
-                      <span className="text-slate-400 truncate max-w-[100px]">
+                    <div key={i} className="flex items-center justify-between text-[12px]">
+                      <span className="text-slate-300 truncate max-w-[110px]">
                         {m.isHome ? `x ${m.awayTeam.split(' ')[0]}` : `em ${m.homeTeam.split(' ')[0]}`}
                       </span>
                       <span className={cn('font-bold font-mono tabular-nums flex-shrink-0',
@@ -1429,16 +1442,16 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
                 </div>
                 <div className="mt-2 flex gap-3 border-t border-slate-800/60 pt-2">
                   <div className="text-center flex-1">
-                    <div className="text-[13px] font-black text-emerald-300">{awayTeamStats.avgGoalsScored.toFixed(1)}</div>
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Gols/j</div>
+                    <div className="text-[15px] font-black text-emerald-300">{awayTeamStats.avgGoalsScored.toFixed(1)}</div>
+                    <div className="text-[11px] text-slate-400 font-semibold">Gols/j</div>
                   </div>
                   <div className="text-center flex-1">
-                    <div className="text-[13px] font-black text-red-300">{awayTeamStats.avgGoalsConceded.toFixed(1)}</div>
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Sofre/j</div>
+                    <div className="text-[15px] font-black text-red-300">{awayTeamStats.avgGoalsConceded.toFixed(1)}</div>
+                    <div className="text-[11px] text-slate-400 font-semibold">Sofre/j</div>
                   </div>
                   <div className="text-center flex-1">
-                    <div className="text-[13px] font-black text-amber-300">{Math.round(awayTeamStats.awayWinRate * 100)}%</div>
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">V fora%</div>
+                    <div className="text-[15px] font-black text-amber-300">{Math.round(awayTeamStats.awayWinRate * 100)}%</div>
+                    <div className="text-[11px] text-slate-400 font-semibold">V fora%</div>
                   </div>
                 </div>
               </div>
@@ -1448,7 +1461,7 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
             <div className="grid grid-cols-3 gap-2">
               {/* H2H */}
               <div className="rounded-xl border border-slate-800/70 bg-slate-900/40 p-3">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Confrontos diretos</div>
+                <div className="text-[11px] font-bold text-slate-300 mb-2">Confrontos diretos</div>
                 {headToHead.totalMatches > 0 ? (
                   <>
                     <div className="flex items-center gap-1 mb-2">
@@ -1469,7 +1482,7 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
                     </div>
                     <div className="space-y-1">
                       {headToHead.recentMatches.slice(0, 3).map((m, i) => (
-                        <div key={i} className="flex items-center justify-between text-[10px]">
+                        <div key={i} className="flex items-center justify-between text-[12px]">
                           <span className="text-slate-400 font-mono">{m.dateEvent?.slice(0, 7)}</span>
                           <span className={cn('font-bold font-mono',
                             m.result === 'W' ? 'text-blue-400' : m.result === 'D' ? 'text-slate-400' : 'text-amber-400'
@@ -1485,7 +1498,7 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
 
               {/* Over/Under tendência */}
               <div className="rounded-xl border border-slate-800/70 bg-slate-900/40 p-3">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Gols — tendência</div>
+                <div className="text-[11px] font-semibold text-slate-300 mb-2">Gols — tendência</div>
                 <div className="space-y-2">
                   {[
                     { label: 'Over 2.5', pct: Math.round(((homeTeamStats.over25Rate + awayTeamStats.over25Rate) / 2) * 100), color: 'bg-emerald-500' },
@@ -1511,17 +1524,17 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
                     <span className="text-[10px] text-slate-400">⚽ xG total</span>
-                    <span className="text-[13px] font-black text-emerald-300 font-mono">{predictions.expectedTotalGoals.toFixed(2)}</span>
+                    <span className="text-[15px] font-black text-emerald-300 font-mono">{predictions.expectedTotalGoals.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-[10px] text-slate-400">🟨 Cartões/j</span>
-                    <span className="text-[13px] font-black text-amber-300 font-mono">
+                    <span className="text-[15px] font-black text-amber-300 font-mono">
                       {((homeTeamStats.avgTotalCardsPerGame + awayTeamStats.avgTotalCardsPerGame) / 2).toFixed(1)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-[10px] text-slate-400">🚩 Escanteios</span>
-                    <span className="text-[13px] font-black text-blue-300 font-mono">
+                    <span className="text-[15px] font-black text-blue-300 font-mono">
                       {(homeTeamStats.avgCornersFor + awayTeamStats.avgCornersFor).toFixed(1)}
                     </span>
                   </div>
@@ -1752,7 +1765,7 @@ export function MatchAnalysisPanel({ analysis, matchLabel }: MatchAnalysisPanelP
                   key={id}
                   onClick={() => setActiveTab(id)}
                   className={cn(
-                    'relative flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left transition-all',
+                    'relative flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-all',
                     activeTab === id
                       ? 'border-blue-500/40 bg-blue-500/10 text-white'
                       : 'border-slate-800/80 bg-slate-950/40 text-slate-400 hover:border-slate-700 hover:text-slate-200',

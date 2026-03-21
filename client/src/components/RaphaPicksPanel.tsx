@@ -3,9 +3,12 @@ import type { Match, Predictions } from '@/lib/types';
 import type { RoundScanEntry } from '@/hooks/useRoundScanner';
 import { cn, formatDecimal, formatPercent, traduzirTextoMercado } from '@/lib/utils';
 import {
+  Activity,
   ArrowRight,
   BarChart3,
   CalendarClock,
+  CheckCircle2,
+  ChevronRight,
   Clock3,
   CreditCard,
   Crown,
@@ -16,7 +19,10 @@ import {
   ShieldCheck,
   Sparkles,
   Target,
+  TrendingUp,
   Trophy,
+  XCircle,
+  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -402,22 +408,26 @@ function useFinishedStats(entries: RoundScanEntry[]) {
 
 function ResultBadge({ status }: { status: PickStatus }) {
   if (status === 'pending') {
-    return <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Pendente</span>;
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-slate-700/80 bg-slate-900/60 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">
+        <Activity className="h-2.5 w-2.5 animate-pulse" />
+        Aguardando
+      </span>
+    );
   }
-
   if (status === 'unavailable') {
-    return <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Sem dado final</span>;
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-slate-700/60 bg-slate-900/40 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+        Sem dado
+      </span>
+    );
   }
-
   return (
-    <span
-      className={cn(
-        'rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em]',
-        status === 'won'
-          ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300'
-          : 'border-red-500/35 bg-red-500/10 text-red-300',
-      )}
-    >
+    <span className={cn(
+      'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-black uppercase tracking-[0.14em]',
+      status === 'won' ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300' : 'border-red-500/40 bg-red-500/15 text-red-300',
+    )}>
+      {status === 'won' ? <CheckCircle2 className="h-2.5 w-2.5" /> : <XCircle className="h-2.5 w-2.5" />}
       {status === 'won' ? 'Acertou' : 'Errou'}
     </span>
   );
@@ -535,11 +545,38 @@ function conservativeLabelBoost(label: string) {
 }
 
 function primaryPickScore(pick: RaphaPick, entry: RoundScanEntry) {
-  return (pick.probability * 0.72) + (entry.summary.decisionScore * 0.18) + pickCategoryBoost(pick.category);
+  const base = (pick.probability * 0.68) + (entry.summary.decisionScore * 0.20) + pickCategoryBoost(pick.category);
+
+  // Bônus de alinhamento com mercado: picks de gols ganham quando modelo e mercado apontam mesma direção
+  let marketBonus = 0;
+  if (entry.marketOdds?.totalLine != null) {
+    const line = entry.marketOdds.totalLine;
+    if (Math.abs(line - 2.5) < 0.1) {
+      if (pick.label.toLowerCase().includes('over 2.5') && entry.predictions.over25Prob > 60) marketBonus = 8;
+      if (pick.label.toLowerCase().includes('under 2.5') && entry.predictions.under25Prob > 58) marketBonus = 7;
+    }
+  }
+
+  // Bônus de confiança: picks com probabilidade alta + dataQuality alta = mais confiáveis
+  const qualityBonus = entry.homeTeamStats
+    ? Math.min(5, ((entry.homeTeamStats.dataQuality ?? 0) + (entry.awayTeamStats?.dataQuality ?? 0)) / 4)
+    : 0;
+
+  // Bônus de escanteios com dados reais
+  const cornersQualityBonus = pick.category === 'escanteios'
+    ? Math.round(((entry.homeTeamStats?.cornersDataQuality ?? 0) + (entry.awayTeamStats?.cornersDataQuality ?? 0)) / 2 * 6)
+    : 0;
+
+  return base + marketBonus + qualityBonus + cornersQualityBonus;
 }
 
 function conservativePickScore(pick: RaphaPick, entry: RoundScanEntry) {
-  return (pick.probability * 0.86) + (entry.summary.stabilityScore * 0.14) + conservativeLabelBoost(pick.label);
+  const base = (pick.probability * 0.84) + (entry.summary.stabilityScore * 0.16) + conservativeLabelBoost(pick.label);
+
+  // Picks conservadores preferem alta probabilidade + mercado alinhado
+  const marketAlignBonus = entry.summary.marketAlignmentScore > 70 ? 6 : entry.summary.marketAlignmentScore > 55 ? 3 : 0;
+
+  return base + marketAlignBonus;
 }
 
 function selectPrimaryPick(picks: RaphaPick[], entry: RoundScanEntry) {
@@ -566,14 +603,20 @@ type MarketFiltrar = 'todos' | PickCategory;
 type ConfidenceFiltrar = 'todas' | 'alta' | 'media' | 'baixa';
 type LeagueFiltrar = 'todas' | string;
 
-const MARKET_FILTERS: Array<{ id: MarketFiltrar; label: string }> = [
-  { id: 'todos', label: 'Todos os mercados' },
-  { id: 'vencedor', label: 'Vencedor' },
-  { id: 'placar', label: 'Placar' },
-  { id: 'gols', label: 'Gols' },
-  { id: 'escanteios', label: 'Escanteios' },
-  { id: 'cartoes', label: 'Cartões' },
+const MARKET_FILTERS: Array<{ id: MarketFiltrar; label: string; icon: typeof Trophy }> = [
+  { id: 'todos', label: 'Todos', icon: BarChart3 },
+  { id: 'vencedor', label: 'Vencedor', icon: Trophy },
+  { id: 'gols', label: 'Gols', icon: Sparkles },
+  { id: 'escanteios', label: 'Escanteios', icon: Flag },
+  { id: 'cartoes', label: 'Cartões', icon: CreditCard },
+  { id: 'placar', label: 'Placar', icon: Target },
 ];
+
+const CONFIDENCE_SHORT: Record<RoundScanEntry['confidence'], string> = {
+  high: 'Alta',
+  medium: 'Média',
+  low: 'Baixa',
+};
 
 const CONFIDENCE_FILTERS: Array<{ id: ConfidenceFiltrar; label: string; value?: RoundScanEntry['confidence'] }> = [
   { id: 'todas', label: 'Todas as confianças' },
@@ -583,38 +626,33 @@ const CONFIDENCE_FILTERS: Array<{ id: ConfidenceFiltrar; label: string; value?: 
 ];
 
 function getMedalMeta(rank: number) {
-  if (rank === 0) {
-    return {
-      label: 'Ouro',
-      cardClass: 'border-yellow-500/35 bg-yellow-500/10 text-yellow-100',
-      badgeClass: 'border-yellow-400/45 bg-yellow-400/15 text-yellow-200',
-      iconClass: 'text-yellow-300',
-    };
-  }
-
-  if (rank === 1) {
-    return {
-      label: 'Prata',
-      cardClass: 'border-slate-400/25 bg-slate-400/10 text-slate-100',
-      badgeClass: 'border-slate-300/35 bg-slate-300/10 text-slate-200',
-      iconClass: 'text-slate-200',
-    };
-  }
-
-  if (rank === 2) {
-    return {
-      label: 'Bronze',
-      cardClass: 'border-amber-700/35 bg-amber-700/10 text-amber-100',
-      badgeClass: 'border-amber-600/35 bg-amber-600/10 text-amber-200',
-      iconClass: 'text-amber-300',
-    };
-  }
-
+  if (rank === 0) return {
+    label: 'Ouro',
+    cardClass: 'border-yellow-500/30 bg-[linear-gradient(145deg,rgba(234,179,8,0.12),rgba(234,179,8,0.04))]',
+    badgeClass: 'border-yellow-400/50 bg-yellow-400/15 text-yellow-200',
+    iconClass: 'text-yellow-300',
+    accentColor: 'text-yellow-300',
+  };
+  if (rank === 1) return {
+    label: 'Prata',
+    cardClass: 'border-slate-400/20 bg-[linear-gradient(145deg,rgba(148,163,184,0.10),rgba(148,163,184,0.03))]',
+    badgeClass: 'border-slate-300/30 bg-slate-300/8 text-slate-200',
+    iconClass: 'text-slate-300',
+    accentColor: 'text-slate-300',
+  };
+  if (rank === 2) return {
+    label: 'Bronze',
+    cardClass: 'border-amber-700/30 bg-[linear-gradient(145deg,rgba(180,83,9,0.12),rgba(180,83,9,0.04))]',
+    badgeClass: 'border-amber-600/35 bg-amber-700/12 text-amber-200',
+    iconClass: 'text-amber-400',
+    accentColor: 'text-amber-400',
+  };
   return {
     label: `Top ${rank + 1}`,
-    cardClass: 'border-slate-700/80 bg-slate-900/60 text-slate-100',
+    cardClass: 'border-slate-700/60 bg-slate-900/50',
     badgeClass: 'border-slate-700 bg-slate-900/70 text-slate-300',
-    iconClass: 'text-slate-300',
+    iconClass: 'text-slate-400',
+    accentColor: 'text-slate-300',
   };
 }
 
@@ -631,9 +669,9 @@ export function RaphaPicksPanel({
   total: number;
   onSelectMatch: (match: Match) => void;
 }) {
-  const [marketFilter, setMarketFiltrar] = useState<MarketFiltrar>('todos');
-  const [confidenceFilter, setConfidenceFiltrar] = useState<ConfidenceFiltrar>('todas');
-  const [leagueFilter, setLeagueFiltrar] = useState<LeagueFiltrar>('todas');
+  const [marketFilter, setMarketFilter] = useState<MarketFiltrar>('todos');
+  const [confidenceFilter, setConfidenceFilter] = useState<ConfidenceFiltrar>('todas');
+  const [leagueFilter, setLeagueFilter] = useState<LeagueFiltrar>('todas');
   const rankedEntries = useMemo(() => rankEntries(entries), [entries]);
   const finishedStatsMap = useFinishedStats(rankedEntries);
 
@@ -678,17 +716,17 @@ export function RaphaPicksPanel({
   }, [generated]);
 
   const visibleMatches = useMemo(() => {
-    const selectedConfidence = CONFIDENCE_FILTERS.find((item) => item.id === confidenceFiltrar)?.value;
+    const selectedConfidence = CONFIDENCE_FILTERS.find((item) => item.id === confidenceFilter)?.value;
 
     return generated
       .filter((item) => !selectedConfidence || item.entry.confidence === selectedConfidence)
-      .filter((item) => leagueFiltrar === 'todas' || (item.entry.match.strLeague || 'Sem liga') === leagueFiltrar)
+      .filter((item) => leagueFilter === 'todas' || (item.entry.match.strLeague || 'Sem liga') === leagueFilter)
       .map((item) => ({
         ...item,
-        picks: item.picks.filter((pick) => marketFiltrar === 'todos' || pick.category === marketFiltrar),
+        picks: item.picks.filter((pick) => marketFilter === 'todos' || pick.category === marketFilter),
       }))
       .filter((item) => item.picks.length > 0);
-  }, [generated, marketFilter, confidenceFilter, leagueFiltrar]);
+  }, [generated, marketFilter, confidenceFilter, leagueFilter]);
 
   const activeMatches = useMemo(
     () => visibleMatches.filter((item) => item.entry.match.strStatus !== 'Match Finished'),
@@ -713,7 +751,7 @@ export function RaphaPicksPanel({
           accuracy: categorySettled.length > 0 ? (categoryWon / categorySettled.length) * 100 : 0,
         };
       })
-      .filter((item) => marketFiltrar === 'todos' || item.category === marketFiltrar);
+      .filter((item) => marketFilter === 'todos' || item.category === marketFilter);
 
     const bestCategory = [...byCategory]
       .filter((item) => item.settled > 0)
@@ -819,111 +857,153 @@ export function RaphaPicksPanel({
       .slice(0, 6);
   }, [finishedMatches]);
 
+  // ── Loading state ──
   if (loading && entries.length === 0) {
     return (
-      <div className="rounded-3xl border border-slate-800 bg-slate-950/55 p-8 text-center">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-blue-500/20 bg-blue-500/10">
-          <Loader2 className="h-6 w-6 animate-spin text-blue-400" />
+      <div className="flex flex-col items-center justify-center rounded-3xl border border-slate-800 bg-[linear-gradient(145deg,rgba(15,23,42,0.95),rgba(2,6,23,0.88))] p-14 text-center">
+        <div className="relative mx-auto mb-6 flex h-16 w-16 items-center justify-center">
+          <div className="absolute inset-0 rounded-2xl border border-blue-500/20 bg-blue-500/8 animate-pulse" />
+          <Loader2 className="relative h-7 w-7 animate-spin text-blue-400" />
         </div>
-        <h2 className="mt-4 text-lg font-black text-white">Montando os Pitacos do Rapha</h2>
-        <p className="mt-2 text-sm text-slate-400">Analisando histórico, força ofensiva, defesa, probabilidade e mercado da rodada.</p>
+        <h2 className="text-xl font-black text-white">Montando os Pitacos do Rapha</h2>
+        <p className="mt-2 max-w-sm text-sm text-slate-400 leading-relaxed">
+          Analisando histórico, força ofensiva, defesa, probabilidade e mercado da rodada.
+        </p>
+        {total > 0 && (
+          <div className="mt-6 w-64">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-blue-600 to-cyan-500 transition-all duration-500"
+                style={{ width: `${Math.max(4, (completed / total) * 100)}%` }}
+              />
+            </div>
+            <p className="mt-2 text-xs text-slate-500">{completed} de {total} análises</p>
+          </div>
+        )}
       </div>
     );
   }
 
+  const progressPct = total > 0 ? Math.round((completed / total) * 100) : 100;
+
   return (
     <div className="space-y-4">
-      <div className="overflow-hidden rounded-[30px] border border-slate-800 bg-[linear-gradient(145deg,rgba(15,23,42,0.95),rgba(2,6,23,0.92))] shadow-[0_24px_60px_-44px_rgba(15,23,42,1)]">
-        <div className="border-b border-slate-800/80 px-5 py-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-300">Pitacos do Rapha</p>
-              <h2 className="mt-1 text-xl font-black text-white">Pitacos prontos, classificação do dia e desempenho por mercado</h2>
-              <p className="mt-2 text-sm text-slate-400">
-                A aba agora separa os melhores pitacos do dia, mostra classificação por liga, filtra por confiança e destaca o pitaco principal ao lado de uma leitura conservadora para cada jogo.
-              </p>
+
+      {/* ── Hero header ── */}
+      <div className="overflow-hidden rounded-[28px] border border-slate-800/80 bg-[radial-gradient(ellipse_at_top_left,rgba(59,130,246,0.14),transparent_40%),radial-gradient(ellipse_at_bottom_right,rgba(16,185,129,0.10),transparent_35%),linear-gradient(145deg,rgba(15,23,42,0.98),rgba(2,6,23,0.94))] shadow-[0_32px_80px_-50px_rgba(59,130,246,0.4)]">
+
+        {/* Top bar */}
+        <div className="flex items-center justify-between gap-4 border-b border-slate-800/60 px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-cyan-500/25 bg-cyan-500/10">
+              <Zap className="h-4 w-4 text-cyan-300" />
             </div>
-            <div className="rounded-2xl border border-slate-700/80 bg-slate-950/60 px-4 py-3 text-right">
-              <div className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Scanner da rodada</div>
-              <div className="mt-1 text-sm font-bold text-slate-200">{completed}/{total || entries.length} análises prontas</div>
-              <div className="mt-1 text-xs text-slate-500">Atualiza conforme novas leituras entram no scanner.</div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-400">Pitacos do Rapha</p>
+              <h2 className="text-lg font-black leading-tight text-white">Melhores leituras da rodada</h2>
+            </div>
+          </div>
+          <div className="hidden items-center gap-3 sm:flex">
+            {loading && (
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
+                <span className="text-xs text-slate-500">Atualizando…</span>
+              </div>
+            )}
+            <div className="rounded-2xl border border-slate-700/60 bg-slate-950/60 px-4 py-2.5 text-right">
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Scanner</p>
+              <p className="mt-0.5 text-sm font-black text-white tabular-nums">{completed}<span className="text-slate-500">/{total || entries.length}</span></p>
             </div>
           </div>
         </div>
 
-        <div className="grid gap-3 border-b border-slate-800/70 px-5 py-4 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-            <div className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Jogos com pitaco</div>
-            <div className="mt-2 text-3xl font-black text-white">{summary.totalMatches}</div>
-            <div className="mt-1 text-xs text-slate-500">Rodada atual filtrada</div>
+        {/* Progress bar */}
+        {total > 0 && progressPct < 100 && (
+          <div className="h-0.5 w-full bg-slate-800/80">
+            <div
+              className="h-full bg-gradient-to-r from-blue-600 via-cyan-500 to-emerald-500 transition-all duration-700"
+              style={{ width: `${progressPct}%` }}
+            />
           </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-            <div className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Ao vivo ou por jogar</div>
-            <div className="mt-2 text-3xl font-black text-amber-300">{summary.activeMatches}</div>
-            <div className="mt-1 text-xs text-slate-500">Pitacos antes do resultado</div>
-          </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-            <div className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Taxa de acerto</div>
-            <div className="mt-2 text-3xl font-black text-emerald-300">{formatPercent(summary.accuracy, { digits: 0 })}</div>
-            <div className="mt-1 text-xs text-slate-500">{summary.wonPicks}/{summary.settledPicks} pitacos liquidados</div>
-          </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-            <div className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Mercado mais forte</div>
-            <div className="mt-2 text-lg font-black text-blue-300">{summary.bestCategory ? PICK_CATEGORY_LABELS[summary.bestCategory.category] : 'Ainda sem base'}</div>
-            <div className="mt-1 text-xs text-slate-500">
-              {summary.bestCategory ? `${summary.bestCategory.won}/${summary.bestCategory.settled} • ${formatPercent(summary.bestCategory.accuracy, { digits: 0 })}` : 'Aguardando resultados encerrados'}
+        )}
+
+        {/* KPI strip */}
+        <div className="grid grid-cols-2 gap-px bg-slate-800/40 sm:grid-cols-4">
+          {[
+            { label: 'Jogos com pitaco', value: String(summary.totalMatches), sub: 'Rodada filtrada', tone: 'text-white' },
+            { label: 'Em aberto / ao vivo', value: String(summary.activeMatches), sub: 'Antes do apito final', tone: 'text-amber-300' },
+            {
+              label: 'Taxa de acerto',
+              value: summary.settledPicks > 0 ? formatPercent(summary.accuracy, { digits: 0 }) : '—',
+              sub: summary.settledPicks > 0 ? `${summary.wonPicks}/${summary.settledPicks} liquidados` : 'Aguardando resultados',
+              tone: summary.accuracy >= 60 ? 'text-emerald-300' : summary.accuracy > 0 ? 'text-amber-300' : 'text-slate-400',
+            },
+            {
+              label: 'Mercado mais forte',
+              value: summary.bestCategory ? PICK_CATEGORY_LABELS[summary.bestCategory.category] : '—',
+              sub: summary.bestCategory ? `${summary.bestCategory.won}/${summary.bestCategory.settled} · ${formatPercent(summary.bestCategory.accuracy, { digits: 0 })}` : 'Aguardando base',
+              tone: 'text-blue-300',
+            },
+          ].map((kpi) => (
+            <div key={kpi.label} className="bg-slate-950/30 px-5 py-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">{kpi.label}</p>
+              <p className={cn('mt-2 text-2xl font-black tabular-nums leading-none', kpi.tone)}>{kpi.value}</p>
+              <p className="mt-1 text-xs text-slate-500">{kpi.sub}</p>
             </div>
-          </div>
+          ))}
         </div>
 
-        <div className="border-b border-slate-800/70 px-5 py-4">
-          <div className="grid gap-4 xl:grid-cols-2">
-            <div>
-              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">
-                <Filter className="h-3.5 w-3.5 text-cyan-300" />
-                Mercado dos pitacos
-              </div>
-              <p className="mt-1 text-xs text-slate-500">Use o filtro para ver só vencedor, placar, gols, escanteios ou cartões.</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {MARKET_FILTERS.map((option) => {
-                  const active = marketFiltrar === option.id;
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => setMarketFiltrar(option.id)}
-                      className={cn(
-                        'rounded-2xl border px-3 py-2 text-xs font-black uppercase tracking-[0.14em] transition-all',
-                        active
-                          ? 'border-cyan-500/45 bg-cyan-500/15 text-cyan-100 shadow-[0_16px_32px_-26px_rgba(6,182,212,0.85)]'
-                          : 'border-slate-700 bg-slate-950/70 text-slate-300 hover:border-slate-600 hover:text-slate-100'
-                      )}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
+        {/* Filters */}
+        <div className="space-y-5 border-t border-slate-800/60 px-6 py-5">
+          {/* Market filter */}
+          <div>
+            <div className="mb-3 flex items-center gap-2">
+              <Filter className="h-3.5 w-3.5 text-cyan-400" />
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Mercado</span>
             </div>
+            <div className="flex flex-wrap gap-2">
+              {MARKET_FILTERS.map((option) => {
+                const active = marketFilter === option.id;
+                const Icon = option.icon;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => setMarketFilter(option.id)}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-2xl border px-3.5 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all duration-150',
+                      active
+                        ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-100 shadow-[0_8px_24px_-12px_rgba(6,182,212,0.7)]'
+                        : 'border-slate-700/60 bg-slate-950/60 text-slate-400 hover:border-slate-600/80 hover:text-slate-200',
+                    )}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {/* Confidence + League row */}
+          <div className="grid gap-5 sm:grid-cols-2">
             <div>
-              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">
-                <ShieldCheck className="h-3.5 w-3.5 text-emerald-300" />
-                Faixa de confiança
+              <div className="mb-3 flex items-center gap-2">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Confiança</span>
               </div>
-              <p className="mt-1 text-xs text-slate-500">Corte a lista por confiança do scanner para enxergar leituras mais fortes.</p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2">
                 {CONFIDENCE_FILTERS.map((option) => {
-                  const active = confidenceFiltrar === option.id;
+                  const active = confidenceFilter === option.id;
                   return (
                     <button
                       key={option.id}
                       type="button"
-                      onClick={() => setConfidenceFiltrar(option.id)}
+                      onClick={() => setConfidenceFilter(option.id)}
                       className={cn(
-                        'rounded-2xl border px-3 py-2 text-xs font-black uppercase tracking-[0.14em] transition-all',
+                        'rounded-2xl border px-3.5 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all duration-150',
                         active
-                          ? 'border-emerald-500/45 bg-emerald-500/15 text-emerald-100 shadow-[0_16px_32px_-26px_rgba(16,185,129,0.85)]'
-                          : 'border-slate-700 bg-slate-950/70 text-slate-300 hover:border-slate-600 hover:text-slate-100'
+                          ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-100 shadow-[0_8px_24px_-12px_rgba(16,185,129,0.65)]'
+                          : 'border-slate-700/60 bg-slate-950/60 text-slate-400 hover:border-slate-600/80 hover:text-slate-200',
                       )}
                     >
                       {option.label}
@@ -933,429 +1013,513 @@ export function RaphaPicksPanel({
               </div>
             </div>
             <div>
-              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">
-                <Trophy className="h-3.5 w-3.5 text-violet-300" />
-                Liga
+              <div className="mb-3 flex items-center gap-2">
+                <Trophy className="h-3.5 w-3.5 text-violet-400" />
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Liga</span>
               </div>
-              <p className="mt-1 text-xs text-slate-500">Filtre os pitacos por competição para enxergar onde o sistema está mais forte.</p>
-              <div className="mt-3">
-                <select
-                  value={leagueFiltrar}
-                  onChange={(event) => setLeagueFiltrar(event.target.value)}
-                  className="w-full rounded-2xl border border-slate-700 bg-slate-950/80 px-3 py-2.5 text-sm font-semibold text-slate-100 outline-none transition focus:border-cyan-500"
-                >
-                  {leagueOptions.map((league) => (
-                    <option key={league} value={league} className="bg-slate-950 text-slate-100">
-                      {league === 'todas' ? 'Todas as ligas' : league}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <select
+                value={leagueFilter}
+                onChange={(e) => setLeagueFilter(e.target.value)}
+                className="w-full rounded-2xl border border-slate-700/60 bg-slate-950/70 px-4 py-2.5 text-sm font-semibold text-slate-100 outline-none transition focus:border-violet-500/60"
+              >
+                {leagueOptions.map((league) => (
+                  <option key={league} value={league} className="bg-slate-950">
+                    {league === 'todas' ? 'Todas as ligas' : league}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </div>
 
-        <div className="grid gap-3 px-5 py-4 lg:grid-cols-[1.2fr,1fr]">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/55 p-4">
-            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-              <Crown className="h-4 w-4 text-yellow-300" />
-              Pódio por mercado
-            </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
-              {podiumCategories.length === 0 ? (
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/45 px-4 py-6 text-sm text-slate-500 md:col-span-3">
-                  Ainda não há resultados suficientes para montar o pódio dos mercados.
+        {/* Pódio + Insights */}
+        {(podiumCategories.length > 0 || leagueRanking.length > 0 || topPendingPicks.length > 0) && (
+          <div className="border-t border-slate-800/60 px-6 py-5">
+            <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+              <div>
+                <div className="mb-4 flex items-center gap-2">
+                  <Crown className="h-4 w-4 text-yellow-300" />
+                  <span className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">Pódio por mercado</span>
                 </div>
-              ) : (
-                podiumCategories.map((item, index) => {
-                  const medal = getMedalMeta(index);
-                  const Icon = categoryIcon(item.category);
-                  return (
-                    <div key={item.category} className={cn('rounded-2xl border p-4', medal.cardClass)}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em]', medal.badgeClass)}>
-                          <Medal className={cn('h-3.5 w-3.5', medal.iconClass)} />
-                          {medal.label}
+                {podiumCategories.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/40 px-4 py-6 text-center text-sm text-slate-500">
+                    Aguardando resultados liquidados para montar o pódio.
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    {podiumCategories.map((item, index) => {
+                      const medal = getMedalMeta(index);
+                      const Icon = categoryIcon(item.category);
+                      return (
+                        <div key={item.category} className={cn('rounded-2xl border p-4', medal.cardClass)}>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em]', medal.badgeClass)}>
+                              <Medal className={cn('h-3 w-3', medal.iconClass)} />
+                              {medal.label}
+                            </span>
+                            <Icon className="h-4 w-4 text-white/70" />
+                          </div>
+                          <p className="mt-3 text-xs font-black uppercase tracking-[0.1em] text-white/80">{PICK_CATEGORY_LABELS[item.category]}</p>
+                          <p className={cn('mt-1 text-2xl font-black tabular-nums', medal.accentColor)}>{formatPercent(item.accuracy, { digits: 0 })}</p>
+                          <p className="mt-1 text-[10px] text-slate-400">{item.won}/{item.settled} liquidados</p>
                         </div>
-                        <Icon className="h-4 w-4 text-white/80" />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="mb-4 flex items-center gap-2">
+                  <Target className="h-4 w-4 text-cyan-300" />
+                  <span className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">Insights do recorte</span>
+                </div>
+                <div className="space-y-2.5">
+                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Melhor pitaco em aberto</p>
+                    {topPendingPicks[0] ? (
+                      <>
+                        <p className="mt-1.5 text-sm font-black text-white">{traduzirTextoMercado(topPendingPicks[0].pick.label)}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">{topPendingPicks[0].item.entry.match.strHomeTeam} x {topPendingPicks[0].item.entry.match.strAwayTeam}</p>
+                      </>
+                    ) : (
+                      <p className="mt-1.5 text-sm text-slate-500">Nenhum em aberto no filtro atual.</p>
+                    )}
+                  </div>
+                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Liga mais forte</p>
+                    {leagueRanking[0] ? (
+                      <>
+                        <p className="mt-1.5 text-sm font-black text-white">{leagueRanking[0].league}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {leagueRanking[0].matches} jogos · {leagueRanking[0].settled > 0 ? formatPercent(leagueRanking[0].accuracy, { digits: 0 }) + ' acerto' : 'índice ' + formatDecimal(leagueRanking[0].avgDecision, 0)}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="mt-1.5 text-sm text-slate-500">Aguardando volume suficiente.</p>
+                    )}
+                  </div>
+                  <div className="rounded-2xl border border-slate-800/60 bg-slate-950/50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Filtro ativo</p>
+                    <p className="mt-1.5 text-sm font-black text-white">{MARKET_FILTERS.find((f) => f.id === marketFilter)?.label}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Confiança: {CONFIDENCE_FILTERS.find((f) => f.id === confidenceFilter)?.label} · Liga: {leagueFilter === 'todas' ? 'Todas' : leagueFilter}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Classificação por liga ── */}
+      {leagueRanking.length > 0 && (
+        <div className="overflow-hidden rounded-3xl border border-slate-800/80 bg-[linear-gradient(145deg,rgba(15,23,42,0.94),rgba(2,6,23,0.86))]">
+          <div className="flex items-center gap-3 border-b border-slate-800/60 px-6 py-4">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-violet-500/25 bg-violet-500/10">
+              <Trophy className="h-4 w-4 text-violet-300" />
+            </div>
+            <div>
+              <h3 className="text-sm font-black uppercase tracking-[0.16em] text-white">Classificação por liga</h3>
+              <p className="text-xs text-slate-500">Competições com melhor leitura no recorte atual</p>
+            </div>
+          </div>
+          <div className="p-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {leagueRanking.map((league, index) => {
+                const medal = getMedalMeta(index);
+                return (
+                  <div key={league.league} className={cn('rounded-2xl border p-4 transition-all hover:-translate-y-0.5', medal.cardClass)}>
+                    <div className="flex items-start justify-between gap-2">
+                      <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em]', medal.badgeClass)}>
+                        <Medal className={cn('h-2.5 w-2.5', medal.iconClass)} />
+                        {medal.label}
+                      </span>
+                      <span className="rounded-full border border-slate-700/60 bg-slate-900/60 px-2 py-0.5 text-[10px] font-bold text-slate-400">{league.high} alta</span>
+                    </div>
+                    <p className="mt-3 text-sm font-black leading-snug text-white">{league.league}</p>
+                    <div className="mt-2 flex items-baseline gap-1.5">
+                      <span className={cn('text-2xl font-black tabular-nums', medal.accentColor)}>
+                        {league.settled > 0 ? formatPercent(league.accuracy, { digits: 0 }) : formatDecimal(league.avgDecision, 0)}
+                      </span>
+                      <span className="text-xs text-slate-400">{league.settled > 0 ? 'acerto' : 'índice'}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-400">{league.matches} jogos · {league.settled > 0 ? `${league.won}/${league.settled} liquidados` : 'aguardando'}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Classificação por horário ── */}
+      {hourRanking.length > 0 && (
+        <div className="overflow-hidden rounded-3xl border border-slate-800/80 bg-[linear-gradient(145deg,rgba(15,23,42,0.94),rgba(2,6,23,0.86))]">
+          <div className="flex items-center gap-3 border-b border-slate-800/60 px-6 py-4">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-amber-500/25 bg-amber-500/10">
+              <Clock3 className="h-4 w-4 text-amber-300" />
+            </div>
+            <div>
+              <h3 className="text-sm font-black uppercase tracking-[0.16em] text-white">Classificação por horário</h3>
+              <p className="text-xs text-slate-500">Faixas com os melhores pitacos em aberto</p>
+            </div>
+          </div>
+          <div className="p-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {hourRanking.map((slot, index) => {
+                const medal = getMedalMeta(index);
+                return (
+                  <div key={slot.label} className={cn('rounded-2xl border p-4', medal.cardClass)}>
+                    <div className="flex items-start justify-between gap-2">
+                      <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em]', medal.badgeClass)}>
+                        <Medal className={cn('h-2.5 w-2.5', medal.iconClass)} />
+                        {medal.label}
+                      </span>
+                      {slot.live > 0 && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-red-500/35 bg-red-500/10 px-2 py-0.5 text-[10px] font-black text-red-300">
+                          <span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />
+                          {slot.live} ao vivo
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-3 text-sm font-black text-white">{slot.label}</p>
+                    <p className={cn('mt-1.5 text-2xl font-black tabular-nums', medal.accentColor)}>{formatPercent(slot.avgProb, { digits: 0 })}</p>
+                    <p className="mt-1 text-xs text-slate-400">{slot.matches} jogo(s) · índice médio {formatDecimal(slot.avgDecision, 0)}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Top pitacos do dia ── */}
+      {topPendingPicks.length > 0 && (
+        <div className="overflow-hidden rounded-3xl border border-slate-800/80 bg-[linear-gradient(145deg,rgba(15,23,42,0.94),rgba(2,6,23,0.86))]">
+          <div className="flex items-center gap-3 border-b border-slate-800/60 px-6 py-4">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-cyan-500/25 bg-cyan-500/10">
+              <Zap className="h-4 w-4 text-cyan-300" />
+            </div>
+            <div>
+              <h3 className="text-sm font-black uppercase tracking-[0.16em] text-white">Melhores pitacos do dia</h3>
+              <p className="text-xs text-slate-500">Picks com maior probabilidade + suporte do índice da rodada</p>
+            </div>
+          </div>
+          <div className="p-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {topPendingPicks.map((entry, index) => {
+                const medal = getMedalMeta(index);
+                const Icon = categoryIcon(entry.pick.category);
+                const risk = getPickRisk(entry.pick, entry.item.entry);
+                return (
+                  <button
+                    type="button"
+                    key={`${entry.item.entry.match.idEvent}-${entry.pick.category}`}
+                    onClick={() => onSelectMatch(entry.item.entry.match)}
+                    className={cn('group rounded-3xl border p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl', medal.cardClass)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <span className={cn('inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-black uppercase tracking-[0.12em]', medal.badgeClass)}>
+                        <Medal className={cn('h-3 w-3', medal.iconClass)} />
+                        {medal.label}
+                      </span>
+                      <span className={cn('text-xl font-black tabular-nums', medal.accentColor)}>{formatPercent(entry.pick.probability, { digits: 0 })}</span>
+                    </div>
+                    <div className="mt-3 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-300/80">
+                      <Icon className="h-3 w-3" />
+                      {PICK_CATEGORY_LABELS[entry.pick.category]}
+                    </div>
+                    <p className="mt-1.5 text-sm font-black text-white leading-snug">{traduzirTextoMercado(entry.pick.label)}</p>
+                    <p className="mt-1 text-xs text-slate-300/80">{entry.item.entry.match.strHomeTeam} x {entry.item.entry.match.strAwayTeam}</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      <span className="rounded-full border border-slate-700/60 bg-slate-900/60 px-2 py-0.5 text-[10px] font-bold text-slate-400">{formatKickoff(entry.item.entry.match)}</span>
+                      <span className="rounded-full border border-blue-500/25 bg-blue-500/8 px-2 py-0.5 text-[10px] font-bold text-blue-300">Índice {entry.item.entry.summary.decisionScore}</span>
+                      <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-black', confidenceTone(entry.item.entry.confidence))}>{CONFIDENCE_SHORT[entry.item.entry.confidence]}</span>
+                      <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-black', riskTone(risk))}>{riskLabel(risk)}</span>
+                    </div>
+                    <p className="mt-2.5 text-xs leading-relaxed text-slate-400">{entry.pick.description}</p>
+                    {entry.item.primaryPick && entry.item.conservativePick && (
+                      <div className="mt-3 grid gap-1.5">
+                        <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/8 px-3 py-1.5 text-[11px]">
+                          <span className="font-black text-cyan-300">Principal: </span>
+                          <span className="text-slate-200">{traduzirTextoMercado(entry.item.primaryPick.label)}</span>
+                        </div>
+                        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/8 px-3 py-1.5 text-[11px]">
+                          <span className="font-black text-emerald-300">Conservador: </span>
+                          <span className="text-slate-200">{traduzirTextoMercado(entry.item.conservativePick.label)}</span>
+                        </div>
                       </div>
-                      <div className="mt-3 text-sm font-black text-white">{PICK_CATEGORY_LABELS[item.category]}</div>
-                      <div className="mt-2 text-2xl font-black text-white">{formatPercent(item.accuracy, { digits: 0 })}</div>
-                      <div className="mt-1 text-xs text-slate-300/80">{item.won}/{item.settled} liquidados</div>
+                    )}
+                    <div className="mt-3 flex items-center justify-end gap-1 text-[11px] font-black text-slate-500 group-hover:text-slate-300 transition-colors">
+                      Ver análise <ArrowRight className="h-3 w-3" />
                     </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Pitacos em aberto ── */}
+      <div className="overflow-hidden rounded-3xl border border-slate-800/80 bg-[linear-gradient(145deg,rgba(15,23,42,0.94),rgba(2,6,23,0.86))]">
+        <div className="flex items-center gap-3 border-b border-slate-800/60 px-6 py-4">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-amber-500/25 bg-amber-500/10">
+            <CalendarClock className="h-4 w-4 text-amber-300" />
+          </div>
+          <div>
+            <h3 className="text-sm font-black uppercase tracking-[0.16em] text-white">Pitacos em aberto</h3>
+            <p className="text-xs text-slate-500">Jogos ao vivo ou que ainda vão começar</p>
+          </div>
+          {activeMatches.length > 0 && (
+            <div className="ml-auto rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-black text-amber-300">
+              {activeMatches.length} jogo{activeMatches.length !== 1 ? 's' : ''}
+            </div>
+          )}
+        </div>
+        <div className="p-4">
+          {activeMatches.length === 0 ? (
+            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/40 px-4 py-10 text-center">
+              <p className="text-sm text-slate-500">Nenhum jogo em aberto no filtro atual.</p>
+              <p className="mt-1 text-xs text-slate-600">Tente remover algum filtro para ver mais pitacos.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {activeMatches.map((item) => {
+                const isLive = item.entry.match.strStatus === 'In Progress';
+                return (
+                  <div key={item.entry.match.idEvent} className={cn('overflow-hidden rounded-3xl border border-slate-800/80 bg-[linear-gradient(145deg,rgba(15,23,42,0.95),rgba(2,6,23,0.88))]', isLive && 'border-red-900/30')}>
+                    <div className={cn('px-5 py-4 border-b border-slate-800/60', isLive && 'bg-red-950/15')}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full border border-slate-700/80 bg-slate-900/70 px-2.5 py-0.5 text-[10px] font-bold text-slate-400">{item.entry.match.strLeague}</span>
+                        {isLive ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-red-500/40 bg-red-500/15 px-2.5 py-0.5 text-[10px] font-black text-red-300">
+                            <span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" />Ao vivo
+                          </span>
+                        ) : (
+                          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-black text-amber-200">Pré-jogo</span>
+                        )}
+                        <span className={cn('rounded-full border px-2.5 py-0.5 text-[10px] font-black', confidenceTone(item.entry.confidence))}>{CONFIDENCE_SHORT[item.entry.confidence]}</span>
+                        <span className="rounded-full border border-blue-500/25 bg-blue-500/8 px-2.5 py-0.5 text-[10px] font-black text-blue-300">Índice {item.entry.summary.decisionScore}</span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-3">
+                        <span className="text-base font-black text-white">{item.entry.match.strHomeTeam}</span>
+                        {isLive && item.scoreline ? (
+                          <span className="rounded-xl border border-red-900/40 bg-red-950/40 px-3 py-1 text-lg font-black tabular-nums text-white">{item.scoreline.home} – {item.scoreline.away}</span>
+                        ) : (
+                          <span className="text-xs font-black text-slate-600">vs</span>
+                        )}
+                        <span className="text-base font-black text-white">{item.entry.match.strAwayTeam}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">{formatKickoff(item.entry.match)} · {traduzirTextoMercado(item.entry.summary.bestAngle)}</p>
+                    </div>
+                    {(item.primaryPick || item.conservativePick) && (
+                      <div className="grid gap-px border-b border-slate-800/60 md:grid-cols-2">
+                        {item.primaryPick && (
+                          <div className="bg-cyan-500/5 px-5 py-3 md:border-r md:border-slate-800/40">
+                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-400">⚡ Principal</p>
+                            <p className="mt-1.5 text-sm font-black text-white">{traduzirTextoMercado(item.primaryPick.label)}</p>
+                            <div className="mt-1.5 flex items-center gap-2">
+                              <span className="text-base font-black text-cyan-300">{formatPercent(item.primaryPick.probability, { digits: 0 })}</span>
+                              <ResultBadge status={item.primaryPick.status} />
+                            </div>
+                          </div>
+                        )}
+                        {item.conservativePick && (
+                          <div className="bg-emerald-500/5 px-5 py-3">
+                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-400">🛡 Conservador</p>
+                            <p className="mt-1.5 text-sm font-black text-white">{traduzirTextoMercado(item.conservativePick.label)}</p>
+                            <div className="mt-1.5 flex items-center gap-2">
+                              <span className="text-base font-black text-emerald-300">{formatPercent(item.conservativePick.probability, { digits: 0 })}</span>
+                              <ResultBadge status={item.conservativePick.status} />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="p-4">
+                      <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                        {item.picks.map((pick) => {
+                          const Icon = categoryIcon(pick.category);
+                          const risk = getPickRisk(pick, item.entry);
+                          return (
+                            <div key={pick.category} className="rounded-2xl border border-slate-800/70 bg-slate-950/50 p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className={cn('inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em]', categoryTone(pick.category))}>
+                                  <Icon className="h-2.5 w-2.5" />
+                                  {PICK_CATEGORY_LABELS[pick.category]}
+                                </div>
+                                <span className="text-sm font-black tabular-nums text-white">{formatPercent(pick.probability, { digits: 0 })}</span>
+                              </div>
+                              <p className="mt-2 text-xs font-black leading-snug text-white">{traduzirTextoMercado(pick.label)}</p>
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                <span className={cn('rounded-full border px-1.5 py-0.5 text-[9px] font-black uppercase', riskTone(risk))}>
+                                  {risk === 'baixo' ? 'Baixo' : risk === 'medio' ? 'Médio' : 'Alto'}
+                                </span>
+                                <ResultBadge status={pick.status} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-3 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => onSelectMatch(item.entry.match)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-blue-500/25 bg-blue-500/8 px-3 py-1.5 text-[11px] font-black text-blue-300 transition-all hover:bg-blue-500/15"
+                        >
+                          Ver análise completa <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Resultados e acertos ── */}
+      <div className="overflow-hidden rounded-3xl border border-slate-800/80 bg-[linear-gradient(145deg,rgba(15,23,42,0.94),rgba(2,6,23,0.86))]">
+        <div className="flex items-center gap-3 border-b border-slate-800/60 px-6 py-4">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-500/25 bg-emerald-500/10">
+            <ShieldCheck className="h-4 w-4 text-emerald-300" />
+          </div>
+          <div>
+            <h3 className="text-sm font-black uppercase tracking-[0.16em] text-white">Resultados e acertos</h3>
+            <p className="text-xs text-slate-500">Jogos encerrados — veja o que bateu e o que ficou fora</p>
+          </div>
+          {finishedMatches.length > 0 && (
+            <div className="ml-auto rounded-full border border-slate-600/40 bg-slate-800/50 px-3 py-1 text-xs font-black text-slate-400">
+              {finishedMatches.length} encerrado{finishedMatches.length !== 1 ? 's' : ''}
+            </div>
+          )}
+        </div>
+        <div className="p-4">
+          {topResolvedPicks.length > 0 && (
+            <div className="mb-5">
+              <p className="mb-3 text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Destaques liquidados</p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {topResolvedPicks.map((entry, index) => {
+                  const medal = getMedalMeta(index);
+                  const Icon = categoryIcon(entry.pick.category);
+                  return (
+                    <button
+                      key={`resolved-${entry.item.entry.match.idEvent}-${entry.pick.category}`}
+                      type="button"
+                      onClick={() => onSelectMatch(entry.item.entry.match)}
+                      className={cn('rounded-3xl border p-4 text-left transition-all hover:-translate-y-0.5', medal.cardClass)}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em]', medal.badgeClass)}>
+                          <Medal className={cn('h-2.5 w-2.5', medal.iconClass)} />
+                          {medal.label}
+                        </span>
+                        <ResultBadge status={entry.pick.status} />
+                      </div>
+                      <div className="mt-3 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-slate-300/80">
+                        <Icon className="h-3 w-3" />
+                        {PICK_CATEGORY_LABELS[entry.pick.category]}
+                      </div>
+                      <p className="mt-1.5 text-sm font-black text-white">{traduzirTextoMercado(entry.pick.label)}</p>
+                      <p className="mt-0.5 text-xs text-slate-300/80">{entry.item.entry.match.strHomeTeam} x {entry.item.entry.match.strAwayTeam}</p>
+                      <p className="mt-2 text-xs text-slate-500">Prob. pré-jogo: {formatPercent(entry.pick.probability, { digits: 0 })}</p>
+                    </button>
                   );
-                })
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/55 p-4">
-            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-              <Target className="h-4 w-4 text-cyan-300" />
-              Recorte atual
-            </div>
-            <div className="mt-3 space-y-3 text-sm text-slate-300">
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
-                <div className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Mercado filtrado</div>
-                <div className="mt-1 text-base font-black text-white">{MARKET_FILTERS.find((item) => item.id === marketFiltrar)?.label}</div>
-                <div className="mt-1 text-xs text-slate-500">Confiança: {CONFIDENCE_FILTERS.find((item) => item.id === confidenceFiltrar)?.label} • Liga: {leagueFiltrar === 'todas' ? 'Todas' : leagueFiltrar}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
-                <div className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Melhor leitura do dia</div>
-                <div className="mt-1 text-sm font-black text-white">{topPendingPicks[0] ? topPendingPicks[0].pick.label : 'Sem pitacos em aberto'}</div>
-                <div className="mt-1 text-xs text-slate-500">{topPendingPicks[0] ? `${topPendingPicks[0].item.entry.match.strHomeTeam} x ${topPendingPicks[0].item.entry.match.strAwayTeam}` : 'O filtro atual não retornou leitura aberta.'}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/60 px-3 py-3">
-                <div className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Liga mais forte no recorte</div>
-                <div className="mt-1 text-base font-black text-white">{leagueRanking[0]?.league ?? 'Ainda sem base'}</div>
-                <div className="mt-1 text-xs text-slate-500">{leagueRanking[0] ? `${leagueRanking[0].matches} jogos • ${leagueRanking[0].settled > 0 ? formatPercent(leagueRanking[0].accuracy, { digits: 0 }) : `índice médio ${formatDecimal(leagueRanking[0].avgDecision, 0)}`}` : 'Aguardando volume suficiente.'}</div>
+                })}
               </div>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-3xl border border-slate-800 bg-slate-950/55 p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <Trophy className="h-4 w-4 text-blue-300" />
-          <div>
-            <h3 className="text-sm font-black uppercase tracking-[0.18em] text-white">Classificação por liga</h3>
-            <p className="mt-1 text-xs text-slate-500">Veja quais competições estão entregando melhor leitura no recorte atual de mercado e confiança.</p>
-          </div>
-        </div>
-
-        {leagueRanking.length === 0 ? (
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/45 px-4 py-6 text-sm text-slate-500">
-            Ainda não há ligas suficientes no recorte atual para montar o classificação.
-          </div>
-        ) : (
-          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-            {leagueRanking.map((league, index) => {
-              const medal = getMedalMeta(index);
-              return (
-                <div key={league.league} className={cn('rounded-3xl border p-4', medal.cardClass)}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className={cn('inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em]', medal.badgeClass)}>
-                      <Medal className={cn('h-3.5 w-3.5', medal.iconClass)} />
-                      {medal.label}
+          )}
+          {finishedMatches.length === 0 ? (
+            <div className="rounded-2xl border border-slate-800/60 bg-slate-950/40 px-4 py-10 text-center">
+              <p className="text-sm text-slate-500">Nenhum jogo encerrado no filtro atual.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {finishedMatches.map((item) => (
+                <div key={item.entry.match.idEvent} className="overflow-hidden rounded-3xl border border-slate-800/80 bg-[linear-gradient(145deg,rgba(15,23,42,0.95),rgba(2,6,23,0.88))]">
+                  <div className="px-5 py-4 border-b border-slate-800/60">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-slate-700/80 bg-slate-900/70 px-2.5 py-0.5 text-[10px] font-bold text-slate-400">{item.entry.match.strLeague}</span>
+                      <span className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2.5 py-0.5 text-[10px] font-black text-slate-400">Encerrado</span>
+                      <span className={cn('rounded-full border px-2.5 py-0.5 text-[10px] font-black', confidenceTone(item.entry.confidence))}>{CONFIDENCE_SHORT[item.entry.confidence]}</span>
+                      {item.settledCount > 0 && (
+                        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-black text-emerald-300">
+                          {item.wonCount}/{item.settledCount} acertos
+                        </span>
+                      )}
                     </div>
-                    <span className="rounded-full border border-slate-700/80 bg-slate-950/70 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-300">{league.high} alta</span>
-                  </div>
-                  <div className="mt-3 text-base font-black text-white">{league.league}</div>
-                  <div className="mt-2 flex items-center gap-2 text-sm text-slate-200">
-                    <span className="text-2xl font-black text-white">{league.settled > 0 ? formatPercent(league.accuracy, { digits: 0 }) : formatDecimal(league.avgDecision, 0)}</span>
-                    <span className="text-xs text-slate-400">{league.settled > 0 ? 'acerto' : 'índice médio'}</span>
-                  </div>
-                  <div className="mt-2 text-xs text-slate-300/80">{league.matches} jogos • {league.settled > 0 ? `${league.won}/${league.settled} liquidados` : 'aguardando liquidação'}</div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-3xl border border-slate-800 bg-slate-950/55 p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <Clock3 className="h-4 w-4 text-amber-300" />
-          <div>
-            <h3 className="text-sm font-black uppercase tracking-[0.18em] text-white">Classificação por horário</h3>
-            <p className="mt-1 text-xs text-slate-500">Veja onde o recorte atual concentra os melhores pitacos por faixa de início.</p>
-          </div>
-        </div>
-
-        {hourRanking.length === 0 ? (
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/45 px-4 py-6 text-sm text-slate-500">
-            Ainda não há jogos em aberto suficientes para montar o classificação por horário.
-          </div>
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {hourRanking.map((slot, index) => {
-              const medal = getMedalMeta(index);
-              return (
-                <div key={slot.label} className={cn('rounded-3xl border p-4', medal.cardClass)}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className={cn('inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em]', medal.badgeClass)}>
-                      <Medal className={cn('h-3.5 w-3.5', medal.iconClass)} />
-                      {medal.label}
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <span className="text-base font-black text-white">{item.entry.match.strHomeTeam}</span>
+                      {item.scoreline && (
+                        <span className="rounded-xl border border-slate-700/60 bg-slate-900/70 px-3 py-1 text-lg font-black tabular-nums text-white">{item.scoreline.home} – {item.scoreline.away}</span>
+                      )}
+                      <span className="text-base font-black text-white">{item.entry.match.strAwayTeam}</span>
                     </div>
-                    <span className="rounded-full border border-slate-700/80 bg-slate-950/70 px-2 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-300">{slot.live} ao vivo</span>
                   </div>
-                  <div className="mt-3 text-base font-black text-white">{slot.label}</div>
-                  <div className="mt-2 text-sm text-slate-200">{slot.matches} jogo(s) • {formatPercent(slot.avgProb, { digits: 0 })} prob. média</div>
-                  <div className="mt-1 text-xs text-slate-400">Índice médio {formatDecimal(slot.avgDecision, 0)}</div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-3xl border border-slate-800 bg-slate-950/55 p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <Target className="h-4 w-4 text-cyan-300" />
-          <div>
-            <h3 className="text-sm font-black uppercase tracking-[0.18em] text-white">Melhores pitacos do dia</h3>
-            <p className="mt-1 text-xs text-slate-500">Classificação pronta dos pitacos com maior probabilidade e melhor apoio do índice da rodada.</p>
-          </div>
-        </div>
-
-        {topPendingPicks.length === 0 ? (
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/45 px-4 py-6 text-center text-sm text-slate-500">
-            Nenhum pitaco em aberto no filtro atual. Tente trocar o mercado para ver mais opções.
-          </div>
-        ) : (
-          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-            {topPendingPicks.map((entry, index) => {
-              const medal = getMedalMeta(index);
-              const Icon = categoryIcon(entry.pick.category);
-              return (
-                <button
-                  type="button"
-                  key={`${entry.item.entry.match.idEvent}-${entry.pick.category}`}
-                  onClick={() => onSelectMatch(entry.item.entry.match)}
-                  className={cn('rounded-3xl border p-4 text-left transition-all hover:-translate-y-0.5', medal.cardClass)}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className={cn('inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em]', medal.badgeClass)}>
-                      <Medal className={cn('h-3.5 w-3.5', medal.iconClass)} />
-                      {medal.label}
-                    </div>
-                    <span className="text-lg font-black text-white">{formatPercent(entry.pick.probability, { digits: 0 })}</span>
-                  </div>
-                  <div className="mt-3 flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.14em] text-slate-300/90">
-                    <Icon className="h-3.5 w-3.5" />
-                    {PICK_CATEGORY_LABELS[entry.pick.category]}
-                  </div>
-                  <div className="mt-2 text-base font-black text-white">{traduzirTextoMercado(entry.pick.label)}</div>
-                  <div className="mt-1 text-sm text-slate-200">{entry.item.entry.match.strHomeTeam} x {entry.item.entry.match.strAwayTeam}</div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
-                    <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-1">{formatKickoff(entry.item.entry.match)}</span>
-                    <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-1">Índice {entry.item.entry.summary.decisionScore}</span>
-                    <span className={cn('rounded-full border px-2 py-1', confidenceTone(entry.item.entry.confidence))}>{CONFIDENCE_LABELS[entry.item.entry.confidence]}</span>
-                    <span className={cn('rounded-full border px-2 py-1', riskTone(getPickRisk(entry.pick, entry.item.entry)))}>{riskLabel(getPickRisk(entry.pick, entry.item.entry))}</span>
-                  </div>
-                  <p className="mt-3 text-xs leading-relaxed text-slate-300/80">{entry.pick.description}</p>
-                  {entry.item.primaryPick && entry.item.conservativePick && (
-                    <div className="mt-3 grid gap-2 text-[11px] text-slate-300">
-                      <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/10 px-3 py-2"><span className="font-black text-cyan-200">Principal:</span> {entry.item.primaryPick.label}</div>
-                      <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2"><span className="font-black text-emerald-200">Conservador:</span> {entry.item.conservativePick.label}</div>
+                  {(item.primaryPick || item.conservativePick) && (
+                    <div className="grid gap-px border-b border-slate-800/60 md:grid-cols-2">
+                      {item.primaryPick && (
+                        <div className="bg-cyan-500/5 px-5 py-3 md:border-r md:border-slate-800/40">
+                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-400">Principal</p>
+                          <p className="mt-1 text-sm font-black text-white">{traduzirTextoMercado(item.primaryPick.label)}</p>
+                          <div className="mt-1.5 flex items-center gap-2">
+                            <span className="text-sm font-black text-cyan-300">{formatPercent(item.primaryPick.probability, { digits: 0 })}</span>
+                            <ResultBadge status={item.primaryPick.status} />
+                          </div>
+                        </div>
+                      )}
+                      {item.conservativePick && (
+                        <div className="bg-emerald-500/5 px-5 py-3">
+                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-400">Conservador</p>
+                          <p className="mt-1 text-sm font-black text-white">{traduzirTextoMercado(item.conservativePick.label)}</p>
+                          <div className="mt-1.5 flex items-center gap-2">
+                            <span className="text-sm font-black text-emerald-300">{formatPercent(item.conservativePick.probability, { digits: 0 })}</span>
+                            <ResultBadge status={item.conservativePick.status} />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-3xl border border-slate-800 bg-slate-950/55 p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <CalendarClock className="h-4 w-4 text-amber-300" />
-          <div>
-            <h3 className="text-sm font-black uppercase tracking-[0.18em] text-white">Pitacos antes do jogo</h3>
-            <p className="mt-1 text-xs text-slate-500">Sugestões que ainda estão em aberto ou em acompanhamento ao vivo.</p>
-          </div>
+                  <div className="p-4">
+                    <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                      {item.picks.map((pick) => {
+                        const Icon = categoryIcon(pick.category);
+                        const risk = getPickRisk(pick, item.entry);
+                        return (
+                          <div key={pick.category} className="rounded-2xl border border-slate-800/70 bg-slate-950/50 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className={cn('inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.1em]', categoryTone(pick.category))}>
+                                <Icon className="h-2.5 w-2.5" />
+                                {PICK_CATEGORY_LABELS[pick.category]}
+                              </div>
+                              <span className="text-sm font-black tabular-nums text-white">{formatPercent(pick.probability, { digits: 0 })}</span>
+                            </div>
+                            <p className="mt-2 text-xs font-black leading-snug text-white">{traduzirTextoMercado(pick.label)}</p>
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              <ResultBadge status={pick.status} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => onSelectMatch(item.entry.match)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700/50 bg-slate-900/60 px-3 py-1.5 text-[11px] font-black text-slate-300 transition-all hover:bg-slate-800/80"
+                      >
+                        Ver análise <ChevronRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-
-        {activeMatches.length === 0 ? (
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/45 px-4 py-6 text-center text-sm text-slate-500">
-            Nenhum jogo pendente nesta data. Role para ver os resultados já encerrados.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {activeMatches.map((item) => (
-              <div key={item.entry.match.idEvent} className="rounded-3xl border border-slate-800 bg-[linear-gradient(145deg,rgba(15,23,42,0.92),rgba(2,6,23,0.88))] p-4">
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-[11px] font-bold text-slate-300">{item.entry.match.strLeague}</span>
-                      {item.entry.match.strStatus === 'In Progress' ? (
-                        <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-[11px] font-black text-red-300">Ao vivo</span>
-                      ) : (
-                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-black text-amber-200">Pré-jogo</span>
-                      )}
-                      <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-black text-emerald-300">Índice {item.entry.summary.decisionScore}</span>
-                      <span className={cn('rounded-full border px-2.5 py-1 text-[11px] font-black', confidenceTone(item.entry.confidence))}>{CONFIDENCE_LABELS[item.entry.confidence]}</span>
-                      {item.primaryPick && <span className={cn('rounded-full border px-2.5 py-1 text-[11px] font-black', riskTone(getPickRisk(item.primaryPick, item.entry)))}>{riskLabel(getPickRisk(item.primaryPick, item.entry))}</span>}
-                    </div>
-                    <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:gap-3">
-                      <div className="text-lg font-black text-white">{item.entry.match.strHomeTeam}</div>
-                      <span className="text-sm font-black text-slate-600">vs</span>
-                      <div className="text-lg font-black text-white">{item.entry.match.strAwayTeam}</div>
-                    </div>
-                    <p className="mt-1 text-sm text-slate-500">{formatKickoff(item.entry.match)} • {traduzirTextoMercado(item.entry.summary.bestAngle)}</p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    className="border-blue-500/30 bg-blue-500/10 text-blue-200 hover:bg-blue-500/15"
-                    onClick={() => onSelectMatch(item.entry.match)}
-                  >
-                    Abrir análise
-                    <ArrowRight className="ml-2 h-4 w-4" />
-                  </Button>
-                </div>
-
-                <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                  <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/10 p-3">
-                    <div className="text-[11px] font-black uppercase tracking-[0.16em] text-cyan-200">Pitaco principal</div>
-                    <div className="mt-2 text-base font-black text-white">{item.primaryPick ? traduzirTextoMercado(item.primaryPick.label) : 'Sem leitura principal'}</div>
-                    <div className="mt-1 text-xs text-slate-200/80">{item.primaryPick ? `${formatPercent(item.primaryPick.probability, { digits: 0 })} • leitura mais forte do modelo` : 'Aguardando scanner.'}</div>
-                  </div>
-                  <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-3">
-                    <div className="text-[11px] font-black uppercase tracking-[0.16em] text-emerald-200">Pitaco conservador</div>
-                    <div className="mt-2 text-base font-black text-white">{item.conservativePick ? traduzirTextoMercado(item.conservativePick.label) : 'Sem leitura conservadora'}</div>
-                    <div className="mt-1 text-xs text-slate-200/80">{item.conservativePick ? `${formatPercent(item.conservativePick.probability, { digits: 0 })} • linha mais segura` : 'Aguardando scanner.'}</div>
-                  </div>
-                </div>
-
-                <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-                  {item.picks.map((pick) => {
-                    const Icon = categoryIcon(pick.category);
-                    return (
-                      <div key={`${item.entry.match.idEvent}-${pick.category}`} className="rounded-2xl border border-slate-800 bg-slate-950/55 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className={cn('flex items-center gap-2 rounded-xl border px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em]', categoryTone(pick.category))}>
-                            <Icon className="h-3.5 w-3.5" />
-                            {PICK_CATEGORY_LABELS[pick.category]}
-                          </div>
-                          <div className="flex flex-col items-end gap-1">
-                            <span className="text-sm font-black text-white">{formatPercent(pick.probability, { digits: 0 })}</span>
-                            <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em]', riskTone(getPickRisk(pick, item.entry)))}>{riskLabel(getPickRisk(pick, item.entry))}</span>
-                          </div>
-                        </div>
-                        <div className="mt-3 text-base font-black text-white">{traduzirTextoMercado(pick.label)}</div>
-                        <p className="mt-1 text-xs leading-relaxed text-slate-500">{pick.description}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-3xl border border-slate-800 bg-slate-950/55 p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4 text-emerald-300" />
-          <div>
-            <h3 className="text-sm font-black uppercase tracking-[0.18em] text-white">Resultados e acertos</h3>
-            <p className="mt-1 text-xs text-slate-500">Depois que o jogo termina, o painel mostra o que bateu e o que ficou fora da leitura.</p>
-          </div>
-        </div>
-
-        {topResolvedPicks.length > 0 && (
-          <div className="mb-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-            {topResolvedPicks.map((entry, index) => {
-              const medal = getMedalMeta(index);
-              const Icon = categoryIcon(entry.pick.category);
-              return (
-                <button
-                  type="button"
-                  key={`resolved-${entry.item.entry.match.idEvent}-${entry.pick.category}`}
-                  onClick={() => onSelectMatch(entry.item.entry.match)}
-                  className={cn('rounded-3xl border p-4 text-left transition-all hover:-translate-y-0.5', medal.cardClass)}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className={cn('inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em]', medal.badgeClass)}>
-                      <Medal className={cn('h-3.5 w-3.5', medal.iconClass)} />
-                      {medal.label}
-                    </div>
-                    <ResultBadge status={entry.pick.status} />
-                  </div>
-                  <div className="mt-3 flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.14em] text-slate-300/90">
-                    <Icon className="h-3.5 w-3.5" />
-                    {PICK_CATEGORY_LABELS[entry.pick.category]}
-                  </div>
-                  <div className="mt-2 text-base font-black text-white">{traduzirTextoMercado(entry.pick.label)}</div>
-                  <div className="mt-1 text-sm text-slate-200">{entry.item.entry.match.strHomeTeam} x {entry.item.entry.match.strAwayTeam}</div>
-                  <div className="mt-2 text-xs text-slate-300/80">Prob. pré-jogo: {formatPercent(entry.pick.probability, { digits: 0 })}</div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {finishedMatches.length === 0 ? (
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/45 px-4 py-6 text-center text-sm text-slate-500">
-            Ainda não há jogos encerrados para consolidar os pitacos desta data.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {finishedMatches.map((item) => (
-              <div key={item.entry.match.idEvent} className="rounded-3xl border border-slate-800 bg-[linear-gradient(145deg,rgba(15,23,42,0.95),rgba(2,6,23,0.9))] p-4">
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-[11px] font-bold text-slate-300">{item.entry.match.strLeague}</span>
-                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-black text-emerald-300">{item.wonCount}/{item.settledCount || 0} acertos</span>
-                      <span className="rounded-full border border-blue-500/25 bg-blue-500/10 px-2.5 py-1 text-[11px] font-black text-blue-300">{formatPercent(item.accuracy, { digits: 0 })}</span>
-                      <span className={cn('rounded-full border px-2.5 py-1 text-[11px] font-black', confidenceTone(item.entry.confidence))}>{CONFIDENCE_LABELS[item.entry.confidence]}</span>
-                      {item.primaryPick && <span className={cn('rounded-full border px-2.5 py-1 text-[11px] font-black', riskTone(getPickRisk(item.primaryPick, item.entry)))}>{riskLabel(getPickRisk(item.primaryPick, item.entry))}</span>}
-                    </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-2 text-lg font-black text-white">
-                      <span>{item.entry.match.strHomeTeam}</span>
-                      <span className="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-1 text-blue-200">
-                        {item.scoreline?.home ?? 0} x {item.scoreline?.away ?? 0}
-                      </span>
-                      <span>{item.entry.match.strAwayTeam}</span>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
-                      <span>Escanteios finais: {item.finalStats?.loaded ? item.finalStats.totalCorners ?? 'sem dado' : 'carregando...'}</span>
-                      <span>Cartões finais: {item.finalStats?.loaded ? item.finalStats.totalCards ?? 'sem dado' : 'carregando...'}</span>
-                    </div>
-                    <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/10 px-3 py-3">
-                        <div className="text-[11px] font-black uppercase tracking-[0.16em] text-cyan-200">Principal</div>
-                        <div className="mt-1 text-sm font-black text-white">{item.primaryPick ? traduzirTextoMercado(item.primaryPick.label) : 'Sem leitura principal'}</div>
-                        {item.primaryPick && <div className="mt-1 text-xs text-slate-300">{formatPercent(item.primaryPick.probability, { digits: 0 })} • <ResultBadge status={item.primaryPick.status} /></div>}
-                      </div>
-                      <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-3">
-                        <div className="text-[11px] font-black uppercase tracking-[0.16em] text-emerald-200">Conservador</div>
-                        <div className="mt-1 text-sm font-black text-white">{item.conservativePick ? traduzirTextoMercado(item.conservativePick.label) : 'Sem leitura conservadora'}</div>
-                        {item.conservativePick && <div className="mt-1 text-xs text-slate-300">{formatPercent(item.conservativePick.probability, { digits: 0 })} • <ResultBadge status={item.conservativePick.status} /></div>}
-                      </div>
-                    </div>
-                  </div>
-                  <Button
-                    variant="outline"
-                    className="border-slate-700 bg-slate-900/70 text-slate-200 hover:bg-slate-800"
-                    onClick={() => onSelectMatch(item.entry.match)}
-                  >
-                    Ver jogo
-                  </Button>
-                </div>
-
-                <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-                  {item.picks.map((pick) => {
-                    const Icon = categoryIcon(pick.category);
-                    return (
-                      <div key={`${item.entry.match.idEvent}-${pick.category}`} className="rounded-2xl border border-slate-800 bg-slate-950/55 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className={cn('flex items-center gap-2 rounded-xl border px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em]', categoryTone(pick.category))}>
-                            <Icon className="h-3.5 w-3.5" />
-                            {PICK_CATEGORY_LABELS[pick.category]}
-                          </div>
-                          <ResultBadge status={pick.status} />
-                        </div>
-                        <div className="mt-3 flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-black text-white">{traduzirTextoMercado(pick.label)}</div>
-                            <div className="mt-1 text-xs text-slate-500">{pick.description}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-base font-black text-white">{formatPercent(pick.probability, { digits: 0 })}</div>
-                            <div className={cn('mt-1 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em]', riskTone(getPickRisk(pick, item.entry)))}>{riskLabel(getPickRisk(pick, item.entry))}</div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

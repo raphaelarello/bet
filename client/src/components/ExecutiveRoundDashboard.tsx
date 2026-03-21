@@ -105,14 +105,14 @@ function SummaryCard({
   tone: string;
 }) {
   return (
-    <div className="rounded-3xl border border-slate-700/50 bg-[linear-gradient(160deg,rgba(15,23,42,0.95),rgba(2,6,23,0.82))] p-4 shadow-[0_16px_40px_-36px_rgba(14,165,233,0.55)]">
+    <div className="rounded-2xl border border-slate-700/50 bg-[linear-gradient(160deg,rgba(15,23,42,0.95),rgba(2,6,23,0.82))] p-4 shadow-[0_16px_40px_-36px_rgba(14,165,233,0.55)]">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{title}</div>
           <div className={cn('mt-2 text-2xl font-black tracking-tight', tone)}>{value}</div>
           <div className="mt-1 text-xs text-slate-500">{subtitle}</div>
         </div>
-        <div className={cn('rounded-3xl border border-white/5 bg-white/5 p-2.5', tone)}>
+        <div className={cn('rounded-2xl border border-white/5 bg-white/5 p-2.5', tone)}>
           <Icon className="w-4 h-4" />
         </div>
       </div>
@@ -137,7 +137,7 @@ function PickCard({
   return (
     <button
       onClick={onClick}
-      className="w-full text-left rounded-3xl border border-slate-700/50 bg-[linear-gradient(145deg,rgba(15,23,42,0.92),rgba(15,23,42,0.72))] hover:border-blue-500/40 hover:bg-slate-900/80 transition-all p-4"
+      className="w-full text-left rounded-2xl border border-slate-700/50 bg-[linear-gradient(145deg,rgba(15,23,42,0.92),rgba(15,23,42,0.72))] hover:border-blue-500/40 hover:bg-slate-900/80 transition-all p-4"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -224,7 +224,7 @@ export function ExecutiveRoundDashboard({ entries, loading, completed, total, on
                 Leitura rápida dos cenários mais fortes do dia: tops prontos, pressão ao vivo, movimentos fortes de odds e cortes por liga e horário.
               </p>
             </div>
-            <div className="rounded-3xl border border-slate-700/40 bg-slate-900/40 px-4 py-3 min-w-[220px]">
+            <div className="rounded-2xl border border-slate-700/40 bg-slate-900/40 px-4 py-3 min-w-[220px]">
               <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Scanner</div>
               <div className="mt-2 flex items-end gap-2">
                 <div className="text-3xl font-black text-slate-100">{completed}</div>
@@ -248,7 +248,7 @@ export function ExecutiveRoundDashboard({ entries, loading, completed, total, on
         </div>
 
         <div className="px-5 pb-5">
-          <div className="rounded-3xl border border-slate-700/50 bg-[linear-gradient(145deg,rgba(2,6,23,0.88),rgba(15,23,42,0.8))] p-4">
+          <div className="rounded-2xl border border-slate-700/50 bg-[linear-gradient(145deg,rgba(2,6,23,0.88),rgba(15,23,42,0.8))] p-4">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Resumo diário das dicas</div>
@@ -285,7 +285,7 @@ export function ExecutiveRoundDashboard({ entries, loading, completed, total, on
 
       <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_1fr] gap-4">
         <div className="space-y-4">
-          <div className="rounded-3xl border border-slate-700/50 bg-slate-900/45 p-4">
+          <div className="rounded-2xl border border-slate-700/50 bg-slate-900/45 p-4">
             <div className="flex items-center gap-2 mb-3">
               <Flag className="w-4 h-4 text-purple-300" />
               <div>
@@ -322,7 +322,7 @@ export function ExecutiveRoundDashboard({ entries, loading, completed, total, on
             </div>
           </div>
 
-          <div className="rounded-3xl border border-slate-700/50 bg-slate-900/45 p-4">
+          <div className="rounded-2xl border border-slate-700/50 bg-slate-900/45 p-4">
             <div className="flex items-center gap-2 mb-3">
               <Clock3 className="w-4 h-4 text-sky-300" />
               <div>
@@ -360,7 +360,7 @@ export function ExecutiveRoundDashboard({ entries, loading, completed, total, on
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-3xl border border-slate-700/50 bg-slate-900/45 p-4">
+          <div className="rounded-2xl border border-slate-700/50 bg-slate-900/45 p-4">
             <div className="flex items-center gap-2 mb-3">
               <BellRing className="w-4 h-4 text-red-300" />
               <div>
@@ -428,7 +428,7 @@ export function ExecutiveRoundDashboard({ entries, loading, completed, total, on
           )}
 
           {bestOverall && (
-            <div className="rounded-3xl border border-slate-700/50 bg-slate-900/45 p-4">
+            <div className="rounded-2xl border border-slate-700/50 bg-slate-900/45 p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Flame className="w-4 h-4 text-amber-300" />
                 <div>
@@ -436,7 +436,7 @@ export function ExecutiveRoundDashboard({ entries, loading, completed, total, on
                   <div className="text-xs text-slate-500">Resumo rápido do melhor cenário do scanner.</div>
                 </div>
               </div>
-              <div className="rounded-3xl border border-slate-700/40 bg-slate-950/25 p-4">
+              <div className="rounded-2xl border border-slate-700/40 bg-slate-950/25 p-4">
                 <div className="text-sm font-semibold text-slate-100 truncate">{bestOverall.match.strHomeTeam}</div><div className="text-xs text-slate-400 truncate">{bestOverall.match.strAwayTeam}</div>
                 <div className="text-xs text-slate-500 mt-1">{bestOverall.match.strLeague} • {normalizeTime(bestOverall.match.strTime)}</div>
                 <div className="mt-3 grid grid-cols-2 gap-2">

@@ -1,13 +1,11 @@
-// Rapha Guru — Página de Planos e Checkout
+// Rapha Guru — Plans Page v2 (Tailwind)
 
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth, PLAN_META } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
-import {
-  Check, Zap, Crown, Star, Gift, ArrowLeft, Loader2,
-  QrCode, Copy, CreditCard, FileText, Shield, X,
-} from 'lucide-react';
+import { Check, Zap, Crown, Star, Gift, ArrowLeft, Loader2, QrCode, Copy, CreditCard, FileText, Shield, X } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface Plan {
   slug: string; name: string; description: string;
@@ -39,8 +37,7 @@ export default function PlansPage() {
       .catch(() => setFetching(false));
   }, []);
 
-  const price = (p: Plan) =>
-    billing === 'annual' && p.price_annual ? p.price_annual : p.price_monthly;
+  const price = (p: Plan) => billing === 'annual' && p.price_annual ? p.price_annual : p.price_monthly;
 
   const checkout = async () => {
     if (!selected) return;
@@ -49,10 +46,7 @@ export default function PlansPage() {
     try {
       const r = await fetch('/api/payments/checkout', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('rg_auth_token')}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('rg_auth_token')}` },
         body: JSON.stringify({ plan_slug: selected.slug, billing_cycle: billing, method }),
       });
       const d = await r.json() as Record<string,unknown>;
@@ -87,140 +81,142 @@ export default function PlansPage() {
   };
 
   const copy = (t: string) => navigator.clipboard.writeText(t).then(() => toast.success('Copiado!')).catch(() => {});
-
   const cur = subscription?.plan_slug ?? user?.role ?? 'free';
 
   if (fetching) return (
-    <div style={{ minHeight: '100vh', background: '#07090f', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <Loader2 style={{ width: 28, height: 28, color: '#3b82f6', animation: 'spin 1s linear infinite' }} />
-      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
+    <div className="min-h-screen bg-[#07090f] flex items-center justify-center">
+      <Loader2 className="w-7 h-7 text-blue-400 animate-spin" />
     </div>
   );
 
-  // ── Resultado checkout ────────────────────────────────────
+  // ── Resultado checkout ──────────────────────────────────────
   if (result && result.status !== 'paid') {
     return (
-      <div style={{ minHeight: '100vh', background: '#07090f', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: "'Space Grotesk',system-ui,sans-serif" }}>
-        <div style={{ maxWidth: 440, width: '100%', background: '#10141f', border: '1px solid rgba(255,255,255,.07)', borderRadius: 16, padding: 28, textAlign: 'center' }}>
+      <div className="min-h-screen bg-[#07090f] flex items-center justify-center px-4">
+        <div className="w-full max-w-md bg-slate-900/60 border border-white/[0.07] rounded-2xl p-8 text-center space-y-4">
           {method === 'pix' && <>
-            <QrCode style={{ width: 40, height: 40, color: '#22c55e', margin: '0 auto 12px' }} />
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e8eeff', marginBottom: 8 }}>PIX gerado!</h2>
-            <p style={{ fontSize: 13, color: '#4a5568', marginBottom: 20 }}>Escaneie o QR code ou copie o código. Acesso liberado automaticamente após pagamento.</p>
+            <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto">
+              <QrCode className="w-7 h-7 text-emerald-400" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-slate-100">PIX gerado!</h2>
+              <p className="text-sm text-slate-500 mt-1">Escaneie o QR code ou copie o código. Acesso liberado automaticamente após pagamento.</p>
+            </div>
             {result.pix_qr_base64 && (
-              <img src={result.pix_qr_base64 as string} alt="QR PIX"
-                style={{ width: 180, height: 180, margin: '0 auto 16px', borderRadius: 10, display: 'block', border: '4px solid rgba(255,255,255,.06)' }} />
+              <img src={result.pix_qr_base64 as string} alt="QR PIX" className="w-44 h-44 mx-auto rounded-xl border-4 border-white/[0.06]" />
             )}
             {result.pix_qr_code && (
-              <div onClick={() => copy(result.pix_qr_code as string)}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 8, cursor: 'pointer', marginBottom: 12 }}>
-                <span style={{ flex: 1, fontSize: 11, color: '#4a5568', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>{result.pix_qr_code as string}</span>
-                <Copy style={{ width: 14, height: 14, color: '#60a5fa', flexShrink: 0 }} />
-              </div>
+              <button onClick={() => copy(result.pix_qr_code as string)}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-white/[0.04] border border-white/[0.08] rounded-xl hover:bg-white/[0.07] transition-colors">
+                <span className="flex-1 text-xs text-slate-500 truncate text-left">{result.pix_qr_code as string}</span>
+                <Copy className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+              </button>
             )}
-            <p style={{ fontSize: 11, color: '#4a5568' }}>Expira em 1 hora · Pagamento via Pagar.me</p>
-            {result._demo && <p style={{ fontSize: 11, color: '#f59e0b', marginTop: 8 }}>⚠️ Modo demo — configure PAGARME_API_KEY</p>}
+            <p className="text-xs text-slate-600">Expira em 1 hora · Pagamento via Pagar.me</p>
+            {result._demo && <p className="text-xs text-amber-500">⚠️ Modo demo — configure PAGARME_API_KEY</p>}
           </>}
-
           {method === 'boleto' && <>
-            <FileText style={{ width: 40, height: 40, color: '#f59e0b', margin: '0 auto 12px' }} />
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: '#e8eeff', marginBottom: 8 }}>Boleto gerado!</h2>
-            <p style={{ fontSize: 13, color: '#4a5568', marginBottom: 20 }}>Pague até o vencimento. Acesso ativado em até 1 dia útil.</p>
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mx-auto">
+              <FileText className="w-7 h-7 text-amber-400" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-slate-100">Boleto gerado!</h2>
+              <p className="text-sm text-slate-500 mt-1">Pague até o vencimento. Acesso ativado em até 1 dia útil.</p>
+            </div>
             {result.boleto_url && (
               <a href={result.boleto_url as string} target="_blank" rel="noreferrer"
-                style={{ display: 'inline-block', padding: '11px 24px', borderRadius: 10, background: '#f59e0b', color: '#000', fontWeight: 700, fontSize: 14, textDecoration: 'none', marginBottom: 14 }}>
+                className="inline-block px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm transition-colors">
                 Abrir boleto
               </a>
             )}
             {result.boleto_barcode && (
-              <div onClick={() => copy(result.boleto_barcode as string)}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', justifyContent: 'center', fontSize: 12, color: '#4a5568', marginBottom: 8 }}>
-                Copiar código de barras <Copy style={{ width: 13, height: 13, color: '#60a5fa' }} />
-              </div>
+              <button onClick={() => copy(result.boleto_barcode as string)} className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors">
+                Copiar código de barras <Copy className="w-3 h-3" />
+              </button>
             )}
           </>}
-
-          <button onClick={() => go('/')} style={{ marginTop: 16, padding: '9px 22px', borderRadius: 8, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.1)', color: '#8892b0', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
+          <button onClick={() => go('/')} className="mt-2 px-5 py-2.5 rounded-xl bg-white/[0.05] border border-white/[0.1] text-slate-400 hover:text-slate-200 text-sm transition-colors">
             Voltar ao início
           </button>
         </div>
-        <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
       </div>
     );
   }
 
-  // ── Checkout selecionado ──────────────────────────────────
+  // ── Checkout ────────────────────────────────────────────────
   if (selected) {
     const Icon = ICONS[selected.slug] ?? Star;
     const col  = selected.badge_color ?? '#3b82f6';
     const p    = price(selected);
 
     return (
-      <div style={{ minHeight: '100vh', background: '#07090f', color: '#e8eeff', padding: '28px 20px', fontFamily: "'Space Grotesk',system-ui,sans-serif" }}>
-        <div style={{ maxWidth: 500, margin: '0 auto' }}>
-          <button onClick={() => setSel(null)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: '#4a5568', fontSize: 13, marginBottom: 22, fontFamily: 'inherit' }}>
-            <ArrowLeft style={{ width: 15, height: 15 }} /> Voltar
+      <div className="min-h-screen bg-[#07090f] px-4 py-8">
+        <div className="max-w-lg mx-auto space-y-4">
+          <button onClick={() => setSel(null)} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors">
+            <ArrowLeft className="w-4 h-4" /> Voltar
           </button>
 
-          {/* Resumo */}
-          <div style={{ background: '#10141f', border: '1px solid rgba(255,255,255,.07)', borderRadius: 12, padding: '16px 18px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 14 }}>
-            <div style={{ width: 42, height: 42, borderRadius: 11, background: `${col}20`, border: `1px solid ${col}40`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <Icon style={{ width: 19, height: 19, color: col }} />
+          {/* Resumo do plano */}
+          <div className="bg-slate-900/60 border border-white/[0.07] rounded-2xl p-5 flex items-center gap-4">
+            <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: col + '20', border: `1px solid ${col}40` }}>
+              <Icon className="w-5 h-5" style={{ color: col }} />
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 15, fontWeight: 700 }}>Plano {selected.name}</div>
-              <div style={{ fontSize: 12, color: '#4a5568' }}>{billing === 'annual' ? 'Cobrança anual' : 'Cobrança mensal'}</div>
+            <div className="flex-1">
+              <div className="text-sm font-bold text-slate-100">Plano {selected.name}</div>
+              <div className="text-xs text-slate-500">{billing === 'annual' ? 'Cobrança anual' : 'Cobrança mensal'}</div>
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 22, fontWeight: 800, color: col }}>R$ {p.toFixed(2)}</div>
-              <div style={{ fontSize: 11, color: '#4a5568' }}>/{billing === 'annual' ? 'ano' : 'mês'}</div>
+            <div className="text-right">
+              <div className="text-xl font-black" style={{ color: col }}>R$ {p.toFixed(2)}</div>
+              <div className="text-xs text-slate-500">/{billing === 'annual' ? 'ano' : 'mês'}</div>
             </div>
           </div>
 
           {/* Método de pagamento */}
-          <div style={{ background: '#10141f', border: '1px solid rgba(255,255,255,.07)', borderRadius: 12, padding: '16px 18px', marginBottom: 14 }}>
-            <p style={{ fontSize: 11, fontWeight: 700, color: '#4a5568', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 12 }}>Forma de pagamento</p>
-            <div style={{ display: 'flex', gap: 10 }}>
+          <div className="bg-slate-900/60 border border-white/[0.07] rounded-2xl p-5 space-y-3">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Forma de pagamento</p>
+            <div className="grid grid-cols-3 gap-2">
               {([
-                { id: 'pix',         label: 'PIX',    Icon: QrCode,     desc: 'Instantâneo' },
+                { id: 'pix', label: 'PIX', Icon: QrCode, desc: 'Instantâneo' },
                 { id: 'credit_card', label: 'Cartão', Icon: CreditCard, desc: 'Até 12x' },
-                { id: 'boleto',      label: 'Boleto', Icon: FileText,   desc: '3 dias' },
+                { id: 'boleto', label: 'Boleto', Icon: FileText, desc: '3 dias' },
               ] as const).map(({ id, label, Icon: I, desc }) => (
                 <button key={id} onClick={() => setMethod(id)}
-                  style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '12px 8px', borderRadius: 10, cursor: 'pointer', background: method === id ? `${col}15` : 'rgba(255,255,255,.03)', border: `1px solid ${method === id ? col + '55' : 'rgba(255,255,255,.08)'}`, transition: 'all .15s', fontFamily: 'inherit' }}>
-                  <I style={{ width: 18, height: 18, color: method === id ? col : '#4a5568' }} />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: method === id ? '#e8eeff' : '#8892b0' }}>{label}</span>
-                  <span style={{ fontSize: 10, color: '#4a5568' }}>{desc}</span>
+                  className={cn('flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl border transition-all',
+                    method === id ? 'border-white/20 bg-white/[0.08] text-white' : 'border-white/[0.06] bg-white/[0.02] text-slate-500 hover:text-slate-300 hover:border-white/10')}>
+                  <I className="w-4 h-4" />
+                  <span className="text-xs font-semibold">{label}</span>
+                  <span className="text-[10px] text-slate-600">{desc}</span>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Cupom de desconto */}
-          <div style={{ background: '#10141f', border: '1px solid rgba(255,255,255,.07)', borderRadius: 12, padding: '14px 18px', marginBottom: 14 }}>
-            <p style={{ fontSize: 11, fontWeight: 700, color: '#4a5568', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 10 }}>Cupom de desconto</p>
-            <div style={{ display: 'flex', gap: 8 }}>
+          {/* Cupom */}
+          <div className="bg-slate-900/60 border border-white/[0.07] rounded-2xl p-5 space-y-3">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Cupom de desconto</p>
+            <div className="flex gap-2">
               <input value={couponCode} onChange={e => setCouponCode(e.target.value.toUpperCase())}
                 placeholder="Ex: RAPHA20"
-                style={{ flex: 1, padding: '9px 12px', borderRadius: 8, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.1)', color: '#e8eeff', fontSize: 13, outline: 'none' }} />
+                className="flex-1 bg-white/[0.04] border border-white/[0.08] rounded-xl px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 outline-none focus:border-blue-500/50" />
               <button onClick={applyCoupon} disabled={couponLoading || !couponCode}
-                style={{ padding: '9px 16px', borderRadius: 8, background: coupon ? '#22c55e' : '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', opacity: couponLoading ? .6 : 1 }}>
-                {coupon ? '✓' : 'Aplicar'}
+                className={cn('px-4 py-2.5 rounded-xl text-sm font-bold transition-all', coupon ? 'bg-emerald-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white disabled:bg-slate-800 disabled:text-slate-500')}>
+                {coupon ? '✓' : couponLoading ? '...' : 'Aplicar'}
               </button>
             </div>
             {coupon && selected && (
-              <p style={{ fontSize: 12, color: '#22c55e', marginTop: 8 }}>
+              <p className="text-xs text-emerald-400">
                 ✓ Desconto de {coupon.type === 'pct' ? `${coupon.discount}%` : `R$ ${coupon.discount.toFixed(2)}`} aplicado!
                 Novo total: <strong>R$ {finalPrice(selected).toFixed(2)}</strong>
               </p>
             )}
           </div>
 
-          {/* Parcelamento (cartão) */}
+          {/* Parcelamento */}
           {method === 'credit_card' && (
-            <div style={{ background: '#10141f', border: '1px solid rgba(255,255,255,.07)', borderRadius: 12, padding: '14px 18px', marginBottom: 14 }}>
-              <p style={{ fontSize: 11, fontWeight: 700, color: '#4a5568', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 10 }}>Parcelamento</p>
+            <div className="bg-slate-900/60 border border-white/[0.07] rounded-2xl p-5 space-y-3">
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Parcelamento</p>
               <select value={installments} onChange={e => setInstallments(Number(e.target.value))}
-                style={{ width: '100%', padding: '9px 12px', borderRadius: 8, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.1)', color: '#e8eeff', fontSize: 13 }}>
+                className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl px-3 py-2.5 text-sm text-slate-100 outline-none">
                 {[1,2,3,6,12].map(n => {
                   const total = finalPrice(selected);
                   return <option key={n} value={n}>{n}x de R$ {(total/n).toFixed(2)}{n === 1 ? ' (sem juros)' : ''}</option>;
@@ -230,106 +226,107 @@ export default function PlansPage() {
           )}
 
           <button onClick={checkout} disabled={loading}
-            style={{ width: '100%', padding: 14, borderRadius: 11, background: loading ? '#1c2335' : col, color: '#fff', fontSize: 14, fontWeight: 700, border: 'none', cursor: loading ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
-            {loading ? <Loader2 style={{ width: 17, height: 17, animation: 'spin 1s linear infinite' }} /> : <Zap style={{ width: 17, height: 17 }} />}
+            className={cn('w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-sm font-bold transition-all',
+              loading ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'text-white')}
+            style={loading ? undefined : { background: col }}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
             {loading ? 'Processando...' : `Assinar por R$ ${finalPrice(selected).toFixed(2)}`}
           </button>
 
-          <p style={{ textAlign: 'center', fontSize: 11, color: '#4a5568', marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
-            <Shield style={{ width: 12, height: 12 }} /> Pagamento seguro via Pagar.me · SSL 256-bit
+          <p className="text-center text-xs text-slate-600 flex items-center justify-center gap-1.5">
+            <Shield className="w-3 h-3" /> Pagamento seguro via Pagar.me · SSL 256-bit
           </p>
         </div>
-        <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
       </div>
     );
   }
 
-  // ── Grid de planos ────────────────────────────────────────
+  // ── Grid de planos ──────────────────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', background: '#07090f', color: '#e8eeff', padding: '32px 20px', fontFamily: "'Space Grotesk',system-ui,sans-serif" }}>
-      <div style={{ maxWidth: 980, margin: '0 auto' }}>
-        <button onClick={() => go('/')} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: '#4a5568', fontSize: 13, marginBottom: 28, fontFamily: 'inherit' }}>
-          <ArrowLeft style={{ width: 15, height: 15 }} /> Voltar
+    <div className="min-h-screen bg-[#07090f] px-4 py-10">
+      <div className="max-w-5xl mx-auto">
+        <button onClick={() => go('/')} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors mb-8">
+          <ArrowLeft className="w-4 h-4" /> Voltar
         </button>
 
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <h1 style={{ fontSize: 34, fontWeight: 800, letterSpacing: '-.02em', marginBottom: 10 }}>Escolha seu plano</h1>
-          <p style={{ fontSize: 14, color: '#4a5568', marginBottom: 20 }}>Comece grátis · Faça upgrade quando quiser · Cancelare a qualquer hora</p>
+        <div className="text-center mb-10 space-y-4">
+          <h1 className="text-3xl font-black text-white tracking-tight">Escolha seu plano</h1>
+          <p className="text-sm text-slate-500">Comece grátis · Faça upgrade quando quiser · Cancele a qualquer hora</p>
 
-          <div style={{ display: 'inline-flex', background: '#10141f', border: '1px solid rgba(255,255,255,.07)', borderRadius: 50, padding: 4, gap: 4 }}>
+          <div className="inline-flex bg-slate-900/80 border border-white/[0.07] rounded-full p-1 gap-1">
             {(['monthly','annual'] as const).map(b => (
               <button key={b} onClick={() => setBilling(b)}
-                style={{ padding: '7px 20px', borderRadius: 50, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: billing === b ? '#3b82f6' : 'transparent', color: billing === b ? '#fff' : '#4a5568', border: 'none', transition: 'all .15s', fontFamily: 'inherit' }}>
-                {b === 'monthly' ? 'Mensal' : <>
-                  Anual
-                  <span style={{ marginLeft: 6, fontSize: 10, background: 'rgba(34,197,94,.15)', color: '#22c55e', padding: '1px 6px', borderRadius: 8, fontWeight: 700 }}>-33%</span>
-                </>}
+                className={cn('px-5 py-2 rounded-full text-sm font-semibold transition-all',
+                  billing === b ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300')}>
+                {b === 'monthly' ? 'Mensal' : (
+                  <span className="flex items-center gap-2">
+                    Anual
+                    <span className="text-[10px] bg-emerald-500/15 text-emerald-400 px-1.5 py-0.5 rounded-full font-bold">-33%</span>
+                  </span>
+                )}
               </button>
             ))}
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {plans.map(plan => {
-            const Icon    = ICONS[plan.slug] ?? Star;
-            const col     = plan.badge_color ?? '#3b82f6';
-            const isCur   = cur === plan.slug;
-            const isPop   = plan.slug === 'pro';
-            const p       = price(plan);
+            const Icon  = ICONS[plan.slug] ?? Star;
+            const col   = plan.badge_color ?? '#3b82f6';
+            const isCur = cur === plan.slug;
+            const isPop = plan.slug === 'pro';
+            const p     = price(plan);
 
             return (
-              <div key={plan.slug} style={{
-                background: isCur ? `${col}10` : '#10141f',
-                border: `1px solid ${isCur ? col + '45' : isPop ? col + '30' : 'rgba(255,255,255,.07)'}`,
-                borderRadius: 14, padding: '22px 20px', position: 'relative',
-                boxShadow: isPop ? `0 20px 40px -20px ${col}40` : 'none',
-              }}>
+              <div key={plan.slug} className={cn('relative rounded-2xl border p-5 flex flex-col',
+                isCur ? 'border-white/20 bg-white/[0.04]' : isPop ? 'border-white/15 bg-slate-900/80' : 'border-white/[0.07] bg-slate-900/50')}
+                style={isPop ? { boxShadow: `0 20px 50px -20px ${col}35` } : undefined}>
+
                 {isPop && (
-                  <div style={{ position: 'absolute', top: -11, left: '50%', transform: 'translateX(-50%)', background: col, color: '#fff', fontSize: 10, fontWeight: 800, padding: '3px 14px', borderRadius: 20, letterSpacing: '.06em', whiteSpace: 'nowrap' }}>
+                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full text-[10px] font-black text-white tracking-wider"
+                    style={{ background: col }}>
                     MAIS POPULAR
                   </div>
                 )}
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                  <div style={{ width: 38, height: 38, borderRadius: 10, background: `${col}20`, border: `1px solid ${col}35`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Icon style={{ width: 17, height: 17, color: col }} />
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: col + '20', border: `1px solid ${col}35` }}>
+                    <Icon className="w-4 h-4" style={{ color: col }} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 700 }}>{plan.name}</div>
-                    <div style={{ fontSize: 11, color: '#4a5568' }}>{plan.description}</div>
+                    <div className="text-sm font-bold text-slate-100">{plan.name}</div>
+                    <div className="text-xs text-slate-500">{plan.description}</div>
                   </div>
                 </div>
 
-                <div style={{ marginBottom: 18 }}>
+                <div className="mb-5">
                   {plan.price_monthly === 0
-                    ? <span style={{ fontSize: 26, fontWeight: 800, color: col }}>Grátis</span>
+                    ? <span className="text-2xl font-black" style={{ color: col }}>Grátis</span>
                     : <>
-                        <span style={{ fontSize: 26, fontWeight: 800, color: col }}>R$ {p.toFixed(2)}</span>
-                        <span style={{ fontSize: 12, color: '#4a5568' }}>/{billing === 'annual' ? 'ano' : 'mês'}</span>
+                        <span className="text-2xl font-black" style={{ color: col }}>R$ {p.toFixed(2)}</span>
+                        <span className="text-xs text-slate-500 ml-1">/{billing === 'annual' ? 'ano' : 'mês'}</span>
                         {billing === 'annual' && plan.price_annual && (
-                          <div style={{ fontSize: 11, color: '#22c55e', marginTop: 2 }}>≈ R$ {(plan.price_annual / 12).toFixed(2)}/mês</div>
+                          <div className="text-xs text-emerald-400 mt-0.5">≈ R$ {(plan.price_annual / 12).toFixed(2)}/mês</div>
                         )}
                       </>
                   }
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+                <div className="space-y-2 mb-6 flex-1">
                   {plan.features.map(f => (
-                    <div key={f} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#8892b0' }}>
-                      <Check style={{ width: 13, height: 13, color: col, flexShrink: 0, marginTop: 1 }} />
-                      {f}
+                    <div key={f} className="flex items-start gap-2 text-xs text-slate-400">
+                      <Check className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" style={{ color: col }} />{f}
                     </div>
                   ))}
                 </div>
 
                 <button
-                  onClick={() => {
-                    if (isCur || plan.price_monthly === 0) return;
-                    if (!user) { go('/login'); return; }
-                    setSel(plan);
-                  }}
+                  onClick={() => { if (isCur || plan.price_monthly === 0) return; if (!user) { go('/login'); return; } setSel(plan); }}
                   disabled={isCur}
-                  style={{ width: '100%', padding: '11px', borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: isCur ? 'default' : 'pointer', background: isCur ? 'rgba(255,255,255,.05)' : col, color: isCur ? '#4a5568' : '#fff', border: `1px solid ${isCur ? 'rgba(255,255,255,.08)' : 'transparent'}`, fontFamily: 'inherit' }}>
+                  className={cn('w-full py-2.5 rounded-xl text-sm font-bold transition-all',
+                    isCur ? 'bg-white/[0.05] text-slate-500 border border-white/[0.08] cursor-default' : 'text-white hover:opacity-90')}
+                  style={!isCur ? { background: col } : undefined}>
                   {isCur ? '✓ Plano atual' : plan.price_monthly === 0 ? 'Começar grátis' : 'Assinar agora'}
                 </button>
               </div>
@@ -337,11 +334,10 @@ export default function PlansPage() {
           })}
         </div>
 
-        <p style={{ textAlign: 'center', marginTop: 22, fontSize: 12, color: '#4a5568' }}>
-          Sem fidelidade · Cancelare a qualquer momento · Pagamento processado pelo Pagar.me
+        <p className="text-center mt-6 text-xs text-slate-600">
+          Sem fidelidade · Cancele a qualquer momento · Pagamento processado pelo Pagar.me
         </p>
       </div>
-      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 }

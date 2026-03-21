@@ -802,7 +802,12 @@ export function calculateTeamStats(teamId: string, teamName: string, recentMatch
     unbeatenStreak,
     attackStrength,
     defenseStrength,
-    aggressionIndex: lossRate * 0.4 + (avgYellow / 3) * 0.6,
+    aggressionIndex: clamp(
+      lossRate * 0.35 +
+      (avgYellow / Math.max(lp.avgCards / 2, 1)) * 0.45 +
+      (avgRed / 0.12) * 0.20,   // avgRed normalizado por taxa típica
+      0, 1
+    ),
     dataQuality,
   };
 }
@@ -845,18 +850,44 @@ export function calculateH2H(
   const normalizedHome = homeTeamName?.trim().toLowerCase();
   const normalizedAway = awayTeamName?.trim().toLowerCase();
 
+  // Fuzzy match helper — strips accents, punctuation, short words
+  const fuzzy = (s?: string) =>
+    (s || '').toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(' ').filter(w => w.length > 2).join(' ');
+
+  const fHome = fuzzy(homeTeamName);
+  const fAway = fuzzy(awayTeamName);
+
+  const nameMatchesHome = (a: string, b: string) => {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const fa = fuzzy(a), fb = fuzzy(b);
+    if (fa === fb) return true;
+    // Word overlap — at least one meaningful word in common
+    const wa = fa.split(' '), wb = fb.split(' ');
+    return wa.some(w => w.length > 3 && wb.includes(w));
+  };
+
   const h2h = allMatches.filter(m => {
     if ('idHomeTeam' in m && m.idHomeTeam) {
-      return (m.idHomeTeam === homeTeamId && m.idAwayTeam === awayTeamId) ||
-             (m.idHomeTeam === awayTeamId && m.idAwayTeam === homeTeamId);
+      // Match by ID (exact)
+      const byId =
+        (m.idHomeTeam === homeTeamId && m.idAwayTeam === awayTeamId) ||
+        (m.idHomeTeam === awayTeamId && m.idAwayTeam === homeTeamId);
+      if (byId) return true;
     }
 
+    // Fallback: fuzzy name match (catches cross-source duplicates)
     const rm = m as RecentMatch;
     if (!normalizedHome || !normalizedAway) return false;
-    const home = rm.homeTeam?.trim().toLowerCase();
-    const away = rm.awayTeam?.trim().toLowerCase();
-    return (home === normalizedHome && away === normalizedAway) ||
-           (home === normalizedAway && away === normalizedHome);
+    const mHome = rm.homeTeam?.trim().toLowerCase() || '';
+    const mAway = rm.awayTeam?.trim().toLowerCase() || '';
+    return (
+      (nameMatchesHome(mHome, normalizedHome) && nameMatchesHome(mAway, normalizedAway)) ||
+      (nameMatchesHome(mHome, normalizedAway) && nameMatchesHome(mAway, normalizedHome))
+    );
   });
 
   const parsed: RecentMatch[] = h2h.map(m => {
@@ -870,36 +901,49 @@ export function calculateH2H(
     over25Rate: 0.5, avgCards: 3.5, recentMatches: [],
   };
 
-  const homeWins = parsed.filter(m => (m.homeTeam?.trim().toLowerCase() === normalizedHome && m.homeScore > m.awayScore) ||
-    (m.awayTeam?.trim().toLowerCase() === normalizedHome && m.awayScore > m.homeScore)).length;
+  const homeWins = parsed.filter(m =>
+    (nameMatchesHome(m.homeTeam, normalizedHome ?? '') && m.homeScore > m.awayScore) ||
+    (nameMatchesHome(m.awayTeam, normalizedHome ?? '') && m.awayScore > m.homeScore)
+  ).length;
   const draws = parsed.filter(m => m.result === 'D').length;
-  const awayWins = parsed.filter(m => (m.homeTeam?.trim().toLowerCase() === normalizedAway && m.homeScore > m.awayScore) ||
-    (m.awayTeam?.trim().toLowerCase() === normalizedAway && m.awayScore > m.homeScore)).length;
+  const awayWins = parsed.filter(m =>
+    (nameMatchesHome(m.homeTeam, normalizedAway ?? '') && m.homeScore > m.awayScore) ||
+    (nameMatchesHome(m.awayTeam, normalizedAway ?? '') && m.awayScore > m.homeScore)
+  ).length;
+
   const totalGoals = parsed.reduce((s, m) => s + m.totalGoals, 0);
   const btts = parsed.filter(m => m.homeScore > 0 && m.awayScore > 0).length;
   const over25 = parsed.filter(m => m.totalGoals > 2.5).length;
 
-  const homeGoals = parsed.reduce((sum, match) => {
-    if (match.homeTeam?.trim().toLowerCase() === normalizedHome) return sum + match.homeScore;
-    if (match.awayTeam?.trim().toLowerCase() === normalizedHome) return sum + match.awayScore;
+  // avgCards: usa dados reais de cartões quando disponíveis no histórico H2H
+  const matchesWithCards = parsed.filter(m => (m.yellowCards ?? 0) > 0 || (m.redCards ?? 0) > 0);
+  const realAvgCards = matchesWithCards.length > 0
+    ? matchesWithCards.reduce((s, m) => s + (m.yellowCards ?? 0) + (m.redCards ?? 0) * 2, 0) / matchesWithCards.length
+    : null;
+  const avgCards = realAvgCards !== null
+    ? Math.round(realAvgCards * 10) / 10
+    : 3.5; // default liga média
+
+  const homeGoals = parsed.reduce((sum, m) => {
+    if (nameMatchesHome(m.homeTeam, normalizedHome ?? '')) return sum + m.homeScore;
+    if (nameMatchesHome(m.awayTeam, normalizedHome ?? '')) return sum + m.awayScore;
     return sum;
   }, 0);
 
-  const awayGoals = parsed.reduce((sum, match) => {
-    if (match.homeTeam?.trim().toLowerCase() === normalizedAway) return sum + match.homeScore;
-    if (match.awayTeam?.trim().toLowerCase() === normalizedAway) return sum + match.awayScore;
+  const awayGoals = parsed.reduce((sum, m) => {
+    if (nameMatchesHome(m.homeTeam, normalizedAway ?? '')) return sum + m.homeScore;
+    if (nameMatchesHome(m.awayTeam, normalizedAway ?? '')) return sum + m.awayScore;
     return sum;
   }, 0);
 
   return {
     totalMatches: parsed.length,
     homeWins, draws, awayWins,
-    homeGoals,
-    awayGoals,
+    homeGoals, awayGoals,
     avgTotalGoals: totalGoals / parsed.length,
     bttsRate: btts / parsed.length,
     over25Rate: over25 / parsed.length,
-    avgCards: 3.5,
+    avgCards,
     recentMatches: parsed.slice(0, 6),
   };
 }
@@ -911,7 +955,8 @@ export function calculatePredictions(
   homeStats: TeamStats,
   awayStats: TeamStats,
   isHomeGame: boolean = true,
-  leagueId?: string
+  leagueId?: string,
+  headToHead?: { avgTotalGoals: number; bttsRate: number; over25Rate: number; totalMatches: number }
 ): Predictions {
   const lp = getLeagueProfile(leagueId);
   const leagueAvgGoals = lp.avgGoals / 2;
@@ -920,13 +965,54 @@ export function calculatePredictions(
   const homeAdv = isHomeGame ? lp.homeAdv : 1.0;
 
   // Use home/away specific stats when available
-  const homeAttack = (isHomeGame ? homeStats.avgGoalsScoredHome : homeStats.avgGoalsScoredAway) / leagueAvgGoals;
+  const homeAttack  = (isHomeGame ? homeStats.avgGoalsScoredHome  : homeStats.avgGoalsScoredAway)  / leagueAvgGoals;
   const homeDefense = (isHomeGame ? homeStats.avgGoalsConcededHome : homeStats.avgGoalsConcededAway) / leagueAvgGoals;
-  const awayAttack = (!isHomeGame ? awayStats.avgGoalsScoredHome : awayStats.avgGoalsScoredAway) / leagueAvgGoals;
-  const awayDefense = (!isHomeGame ? awayStats.avgGoalsConcededHome : awayStats.avgGoalsConcededAway) / leagueAvgGoals;
+  const awayAttack  = (isHomeGame ? awayStats.avgGoalsScoredAway  : awayStats.avgGoalsScoredHome)  / leagueAvgGoals;
+  const awayDefense = (isHomeGame ? awayStats.avgGoalsConcededAway : awayStats.avgGoalsConcededHome) / leagueAvgGoals;
 
-  const xGHome = Math.max(0.25, homeAttack * awayDefense * leagueAvgGoals * homeAdv);
-  const xGAway = Math.max(0.25, awayAttack * homeDefense * leagueAvgGoals);
+  let xGHome = Math.max(0.25, homeAttack * awayDefense * leagueAvgGoals * homeAdv);
+  let xGAway = Math.max(0.25, awayAttack * homeDefense * leagueAvgGoals);
+
+  // ---- AJUSTE 1: Forma recente (formMomentum) ─────────────────────────────
+  // formMomentum: -1 (em queda) a +1 (em alta), calculado por pts3 vs prev3
+  // Impacto: até ±6% no xG do time, suavizado para não exagerar curto prazo
+  const homeMomentumAdj = clamp(1 + homeStats.formMomentum * 0.06, 0.92, 1.08);
+  const awayMomentumAdj = clamp(1 + awayStats.formMomentum * 0.06, 0.92, 1.08);
+  xGHome = xGHome * homeMomentumAdj;
+  xGAway = xGAway * awayMomentumAdj;
+
+  // ---- AJUSTE 2: Over25Rate e BttsRate históricos do time ─────────────────
+  // Se o time tem histórico forte de jogos com muitos gols (over25Rate alto),
+  // calibramos o xG para cima levemente. Isso captura estilo de jogo.
+  // Blend de 15% para não sobreponderar curto prazo.
+  const homeOver25Signal = clamp((homeStats.over25Rate - 0.5) * 0.15 + 1, 0.94, 1.06);
+  const awayOver25Signal = clamp((awayStats.over25Rate - 0.5) * 0.15 + 1, 0.94, 1.06);
+  const over25Blend = (homeOver25Signal + awayOver25Signal) / 2;
+  xGHome = xGHome * over25Blend;
+  xGAway = xGAway * over25Blend;
+
+  // ---- AJUSTE 3: H2H — média histórica de gols entre estes dois times ─────
+  // Quando temos H2H com 3+ jogos, blendamos 20% do xG total com a média H2H.
+  // Confrontos diretos capturam dinâmicas específicas entre os times.
+  if (headToHead && headToHead.totalMatches >= 3) {
+    const h2hAvgPerTeam = headToHead.avgTotalGoals / 2;
+    const h2hBlend = Math.min(headToHead.totalMatches / 15, 0.20); // máx 20%
+
+    const h2hHomeGoals = h2hAvgPerTeam * (xGHome / Math.max(xGHome + xGAway, 0.1));
+    const h2hAwayGoals = h2hAvgPerTeam * (xGAway / Math.max(xGHome + xGAway, 0.1));
+
+    xGHome = xGHome * (1 - h2hBlend) + h2hHomeGoals * h2hBlend;
+    xGAway = xGAway * (1 - h2hBlend) + h2hAwayGoals * h2hBlend;
+  }
+
+  // ---- AJUSTE 4: BttsRate histórico do H2H calibra probabilidade de gol ──
+  // Sem alterar xG, mas será usado no bttsYes depois via ajuste direto.
+  const h2hBttsRate = headToHead && headToHead.totalMatches >= 3 ? headToHead.bttsRate : null;
+  const h2hOver25Rate = headToHead && headToHead.totalMatches >= 3 ? headToHead.over25Rate : null;
+
+  // Clamp final de xG
+  xGHome = clamp(xGHome, 0.20, 4.5);
+  xGAway = clamp(xGAway, 0.20, 4.0);
   const xGTotal = xGHome + xGAway;
 
   // ---- RESULT PROBABILITIES (Dixon-Coles bivariate Poisson + tau correction) ----
@@ -977,14 +1063,26 @@ export function calculatePredictions(
   // ---- OVER/UNDER GOALS ----
   const over05 = pct(poissonOver(xGTotal, 0));
   const over15 = pct(poissonOver(xGTotal, 1));
-  const over25 = pct(poissonOver(xGTotal, 2));
+  let over25 = pct(poissonOver(xGTotal, 2));
   const over35 = pct(poissonOver(xGTotal, 3));
   const over45 = pct(poissonOver(xGTotal, 4));
 
   // ---- BTTS ----
   const homeScores = 1 - poissonProb(xGHome, 0);
   const awayScores = 1 - poissonProb(xGAway, 0);
-  const bttsYes = pct(homeScores * awayScores);
+  let bttsYes = pct(homeScores * awayScores);
+
+  // ---- CALIBRAÇÃO H2H em over25 e BTTS ───────────────────────────────────
+  // Quando temos ≥3 H2H, blendamos com as taxas reais observadas entre estes times.
+  // Máx blend 25% para preservar poder preditivo do modelo Poisson.
+  if (h2hOver25Rate !== null) {
+    const h2hBlend = Math.min((headToHead?.totalMatches ?? 0) / 12, 0.25);
+    over25 = clamp(over25 * (1 - h2hBlend) + (h2hOver25Rate * 100) * h2hBlend, 5, 95);
+  }
+  if (h2hBttsRate !== null) {
+    const h2hBlend = Math.min((headToHead?.totalMatches ?? 0) / 12, 0.25);
+    bttsYes = clamp(bttsYes * (1 - h2hBlend) + (h2hBttsRate * 100) * h2hBlend, 5, 95);
+  }
   const bttsNo = 100 - bttsYes;
 
   // ---- TEAM SCORING ----
@@ -1131,24 +1229,36 @@ export function calculatePredictions(
 }
 
 // ============================================================
-// SCORE PREDICTIONS (Top 6 most likely scores)
+// SCORE PREDICTIONS — com Dixon-Coles tau correction
 // ============================================================
 export function calculateScorePredictions(xGHome: number, xGAway: number): ScorePrediction[] {
   const scores: ScorePrediction[] = [];
-  for (let i = 0; i <= 5; i++) {
-    for (let j = 0; j <= 5; j++) {
-      const prob = poissonProb(xGHome, i) * poissonProb(xGAway, j);
-      if (prob > 0.005) {
+
+  // Calcula probabilidades brutas com tau correction (mesmo modelo do calculatePredictions)
+  let totalProb = 0;
+  for (let i = 0; i <= 6; i++) {
+    for (let j = 0; j <= 6; j++) {
+      const p = poissonProb(xGHome, i) * poissonProb(xGAway, j) * dixonColesTau(i, j, xGHome, xGAway);
+      totalProb += p;
+      if (p > 0.003) {
+        let label = `${i} - ${j}`;
+        // Tags contextuais nos placares mais prováveis
+        if (i === j) label += ' (Empate)';
         scores.push({
           homeGoals: i,
           awayGoals: j,
-          probability: Math.round(prob * 1000) / 10,
-          label: `${i} - ${j}`,
+          probability: p, // bruto — normalizamos abaixo
+          label,
         });
       }
     }
   }
-  return scores.sort((a, b) => b.probability - a.probability).slice(0, 8);
+
+  // Normaliza para que a soma seja 100%
+  return scores
+    .map(s => ({ ...s, probability: Math.round((s.probability / Math.max(totalProb, 0.01)) * 1000) / 10 }))
+    .sort((a, b) => b.probability - a.probability)
+    .slice(0, 8);
 }
 
 // ============================================================
@@ -1438,7 +1548,9 @@ export function generateTips(
   homeStats: TeamStats,
   awayStats: TeamStats,
   homeTeam: string,
-  awayTeam: string
+  awayTeam: string,
+  headToHead?: { totalMatches: number; homeWins: number; draws: number; awayWins: number; avgTotalGoals: number; bttsRate: number; over25Rate: number; avgCards: number },
+  marketOdds?: { totalLine?: number | null; overOdds?: number | null; underOdds?: number | null } | null
 ): Tip[] {
   const tips: Tip[] = [];
 
@@ -1691,6 +1803,82 @@ export function generateTips(
       predictions.away2PlusGoalsProb,
       predictions.away2PlusGoalsProb > 52 ? 'medium' : 'low',
       predictions.away2PlusGoalsProb > 50);
+  }
+
+  // ---- TIPS BASEADAS EM H2H ────────────────────────────────────────────────
+  if (headToHead && headToHead.totalMatches >= 4) {
+    const h2hBtts = headToHead.bttsRate * 100;
+    const h2hOver25 = headToHead.over25Rate * 100;
+    const h2hAvgGoals = headToHead.avgTotalGoals;
+    const h2hAvgCards = headToHead.avgCards;
+    const h2hHomeWinRate = (headToHead.homeWins / headToHead.totalMatches) * 100;
+
+    if (h2hBtts >= 65 && predictions.bttsYesProb >= 50) {
+      add('h2h-btts-yes', 'btts', 'Ambos Marcam — H2H confirma',
+        `Em ${headToHead.totalMatches} confrontos diretos, ambos marcaram em ${Math.round(h2hBtts)}% das vezes`,
+        Math.round(predictions.bttsYesProb * 0.7 + h2hBtts * 0.3), 'high', true);
+    } else if (h2hBtts <= 30 && predictions.bttsNoProb >= 45) {
+      add('h2h-btts-no', 'btts', 'Ambos Marcam — Não (H2H baixo)',
+        `Apenas ${Math.round(h2hBtts)}% dos últimos ${headToHead.totalMatches} confrontos tiveram ambos marcando`,
+        Math.round(predictions.bttsNoProb * 0.7 + (100 - h2hBtts) * 0.3), 'medium', true);
+    }
+    if (h2hOver25 >= 65 && predictions.over25Prob >= 50) {
+      add('h2h-over25', 'goals', 'Over 2.5 Gols — H2H confirma',
+        `${Math.round(h2hOver25)}% dos confrontos diretos tiveram 3+ gols (média: ${h2hAvgGoals.toFixed(1)})`,
+        Math.round(predictions.over25Prob * 0.7 + h2hOver25 * 0.3), 'high', true);
+    } else if (h2hOver25 <= 30 && predictions.under25Prob >= 45) {
+      add('h2h-under25', 'goals', 'Under 2.5 Gols — H2H histórico',
+        `Só ${Math.round(h2hOver25)}% dos confrontos tiveram 3+ gols. Média H2H: ${h2hAvgGoals.toFixed(1)}`,
+        Math.round(predictions.under25Prob * 0.7 + (100 - h2hOver25) * 0.3), 'medium', true);
+    }
+    if (h2hAvgCards >= 4.5 && predictions.over35CardsProb >= 42) {
+      add('h2h-cards', 'cards', 'Confronto Tenso — H2H histórico',
+        `Média de ${h2hAvgCards.toFixed(1)} cartões nos últimos ${headToHead.totalMatches} confrontos diretos`,
+        predictions.over35CardsProb, 'medium', predictions.over35CardsProb > 50);
+    }
+    if (h2hHomeWinRate >= 65 && predictions.homeWinProb >= 45) {
+      add('h2h-home-dom', 'result', `${homeTeam} — Histórico favorável`,
+        `${homeTeam} venceu ${headToHead.homeWins} de ${headToHead.totalMatches} confrontos diretos`,
+        Math.round(predictions.homeWinProb * 0.75 + h2hHomeWinRate * 0.25), 'medium', true);
+    }
+  }
+
+  // ---- TIPS DE FORMA E MOMENTO ─────────────────────────────────────────────
+  if (homeStats.formMomentum > 0.4 && predictions.homeWinProb > 50) {
+    add('form-home', 'special', `${homeTeam} — Momentum positivo`,
+      `${homeTeam} em ascensão: ${homeStats.form.slice(0,5).join('')}. xG casa: ${predictions.expectedGoalsHome}`,
+      predictions.homeWinProb, predictions.homeWinProb > 60 ? 'high' : 'medium', true);
+  }
+  if (awayStats.formMomentum > 0.4 && predictions.awayWinProb > 40) {
+    add('form-away', 'special', `${awayTeam} — Momentum positivo`,
+      `${awayTeam} em ascensão: ${awayStats.form.slice(0,5).join('')}. xG fora: ${predictions.expectedGoalsAway}`,
+      predictions.awayWinProb, predictions.awayWinProb > 52 ? 'medium' : 'low', predictions.awayWinProb > 48);
+  }
+  if (homeStats.scoringStreak >= 5 && awayStats.concedingStreak >= 4) {
+    add('streak-home-score', 'goals', `${homeTeam} marca — Sequência ativa`,
+      `${homeTeam} marcou nos últimos ${homeStats.scoringStreak} jogos. ${awayTeam} sofreu nos últimos ${awayStats.concedingStreak}`,
+      predictions.homeToScoreProb, 'medium', predictions.homeToScoreProb > 80);
+  }
+  if (awayStats.scoringStreak >= 5 && homeStats.concedingStreak >= 4) {
+    add('streak-away-score', 'goals', `${awayTeam} marca — Sequência ativa`,
+      `${awayTeam} marcou nos últimos ${awayStats.scoringStreak} jogos. ${homeTeam} sofreu nos últimos ${homeStats.concedingStreak}`,
+      predictions.awayToScoreProb, 'medium', predictions.awayToScoreProb > 72);
+  }
+
+  // ---- TIPS CALIBRADAS PELO MERCADO ────────────────────────────────────────
+  if (marketOdds?.totalLine != null) {
+    const line = marketOdds.totalLine;
+    if (Math.abs(line - 2.5) < 0.1) {
+      if (predictions.over25Prob > 62 && predictions.expectedTotalGoals > 2.5) {
+        add('market-over25', 'goals', 'Over 2.5 — Linha do mercado alinhada',
+          `Linha: ${line}. Modelo: ${predictions.expectedTotalGoals.toFixed(2)} xG (${predictions.over25Prob}%)`,
+          predictions.over25Prob, 'high', true);
+      } else if (predictions.under25Prob > 58 && predictions.expectedTotalGoals < 2.5) {
+        add('market-under25', 'goals', 'Under 2.5 — Linha do mercado alinhada',
+          `Linha: ${line}. Modelo: ${predictions.expectedTotalGoals.toFixed(2)} xG (${predictions.under25Prob}%)`,
+          predictions.under25Prob, 'high', true);
+      }
+    }
   }
 
   return tips.sort((a, b) => {
